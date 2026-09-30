@@ -57,7 +57,7 @@ jobs:
       - run: npm run build
       - name: Dependency vulnerabilities (production deps)
         run: npm audit --omit=dev --audit-level=high
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with: { name: frontend-out, path: frontend/out, retention-days: 3 }
 
   e2e:
@@ -97,7 +97,7 @@ jobs:
       - working-directory: frontend
         run: npx playwright test
       - if: failure()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with: { name: e2e-failure, path: "frontend/e2e-results\nserver.log", retention-days: 7 }
 
   images:
