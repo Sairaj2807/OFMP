@@ -129,3 +129,104 @@ data_quality_events = sa.Table(
 )
 
 HYPERTABLES = {"raw_ticks": "received_at", "trades": "trade_ts"}
+
+
+# ---------------------------------------------------------------------------
+# Identity, sessions, audit (migration 0002)
+# ---------------------------------------------------------------------------
+# Every user-owned object will carry owner_user_id and organization_id; an
+# individual user gets a personal organization at registration, so the
+# multi-tenant shape exists from day one.
+
+organizations = sa.Table(
+    "organizations", metadata,
+    sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
+    sa.Column("name", sa.Text, nullable=False),
+    sa.Column("is_personal", sa.Boolean, nullable=False, server_default=sa.false()),
+    sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=NOW),
+    sa.Column("deleted_at", sa.DateTime(timezone=True)),
+)
+
+users = sa.Table(
+    "users", metadata,
+    sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
+    sa.Column("email", sa.Text, nullable=False),                 # stored lower-cased
+    sa.Column("password_hash", sa.Text, nullable=False),         # Argon2id
+    sa.Column("display_name", sa.Text),
+    sa.Column("role", sa.Text, nullable=False, server_default="user"),
+    sa.Column("is_active", sa.Boolean, nullable=False, server_default=sa.true()),
+    sa.Column("email_verified_at", sa.DateTime(timezone=True)),
+    sa.Column("last_login_at", sa.DateTime(timezone=True)),
+    sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=NOW),
+    sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=NOW),
+    sa.Column("deleted_at", sa.DateTime(timezone=True)),
+    sa.CheckConstraint("role IN ('user', 'support', 'admin', 'super_admin')", name="role_valid"),
+    sa.CheckConstraint("email = lower(email)", name="email_lowercase"),
+    sa.Index("uq_users_email_active", "email", unique=True, postgresql_where=sa.text("deleted_at IS NULL")),
+)
+
+organization_members = sa.Table(
+    "organization_members", metadata,
+    sa.Column("organization_id", UUID(as_uuid=True), sa.ForeignKey("organizations.id", ondelete="CASCADE"),
+              primary_key=True),
+    sa.Column("user_id", UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    sa.Column("role", sa.Text, nullable=False),
+    sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=NOW),
+    sa.CheckConstraint("role IN ('owner', 'admin', 'member')", name="role_valid"),
+    sa.Index(None, "user_id"),
+)
+
+user_sessions = sa.Table(
+    "user_sessions", metadata,
+    sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
+    sa.Column("user_id", UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=NOW),
+    sa.Column("last_used_at", sa.DateTime(timezone=True), nullable=False, server_default=NOW),
+    sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("revoked_at", sa.DateTime(timezone=True)),
+    sa.Column("revoked_reason", sa.Text),
+    sa.Column("user_agent", sa.Text),
+    sa.Column("ip", sa.Text),
+    sa.Index(None, "user_id"),
+)
+
+refresh_tokens = sa.Table(
+    "refresh_tokens", metadata,
+    sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
+    sa.Column("session_id", UUID(as_uuid=True), sa.ForeignKey("user_sessions.id", ondelete="CASCADE"),
+              nullable=False),
+    sa.Column("token_hash", sa.Text, nullable=False, unique=True),   # sha256 of the token
+    sa.Column("issued_at", sa.DateTime(timezone=True), nullable=False, server_default=NOW),
+    sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("used_at", sa.DateTime(timezone=True)),               # set on rotation
+    sa.Index(None, "session_id"),
+)
+
+email_tokens = sa.Table(
+    "email_tokens", metadata,
+    sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
+    sa.Column("user_id", UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    sa.Column("purpose", sa.Text, nullable=False),
+    sa.Column("token_hash", sa.Text, nullable=False, unique=True),
+    sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=NOW),
+    sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("used_at", sa.DateTime(timezone=True)),
+    sa.CheckConstraint("purpose IN ('verify_email', 'reset_password')", name="purpose_valid"),
+    sa.Index(None, "user_id"),
+)
+
+audit_logs = sa.Table(
+    "audit_logs", metadata,
+    sa.Column("id", sa.BigInteger, sa.Identity(), primary_key=True),
+    sa.Column("occurred_at", sa.DateTime(timezone=True), nullable=False, server_default=NOW),
+    sa.Column("actor_user_id", UUID(as_uuid=True)),        # no FK: the log must outlive the user
+    sa.Column("action", sa.Text, nullable=False),
+    sa.Column("target_type", sa.Text),
+    sa.Column("target_id", sa.Text),
+    sa.Column("ip", sa.Text),
+    sa.Column("user_agent", sa.Text),
+    sa.Column("request_id", sa.Text),
+    sa.Column("details", JSONB),
+    sa.Index("ix_audit_logs_occurred_at", sa.text("occurred_at DESC")),
+    sa.Index("ix_audit_logs_actor_occurred_at", "actor_user_id", sa.text("occurred_at DESC")),
+)

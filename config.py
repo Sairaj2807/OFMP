@@ -107,6 +107,33 @@ RESTORE_SESSION_ON_START = os.environ.get("RESTORE_SESSION_ON_START", "1").lower
 # session. Recorded by whichever process holds the broker connection.
 RECORD_RAW_TICKS = os.environ.get("RECORD_RAW_TICKS", "1").lower() not in ("0", "false", "no")
 
+# ---------------------------------------------------------------------------
+# Environment, API and authentication
+# ---------------------------------------------------------------------------
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")   # development | staging | production
+if ENVIRONMENT not in ("development", "staging", "production"):
+    raise ValueError(f"ENVIRONMENT must be development, staging or production, got {ENVIRONMENT!r}")
+LOG_FORMAT = os.environ.get("LOG_FORMAT", "json" if ENVIRONMENT != "development" else "text")
+
+# HS256 signing key for access tokens. Required for /api/v1 auth; generate with
+#   python -c "import secrets; print(secrets.token_urlsafe(48))"
+JWT_SECRET = os.environ.get("JWT_SECRET") or None
+if ENVIRONMENT == "production" and (not JWT_SECRET or len(JWT_SECRET) < 32):
+    raise ValueError("JWT_SECRET must be set (>= 32 characters) in production")
+ACCESS_TOKEN_TTL_SEC = int(os.environ.get("ACCESS_TOKEN_TTL_SEC", 15 * 60))
+REFRESH_TOKEN_TTL_SEC = int(os.environ.get("REFRESH_TOKEN_TTL_SEC", 30 * 24 * 3600))
+# Secure cookies are only sent over HTTPS (browsers also allow http://localhost).
+COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "1").lower() not in ("0", "false", "no")
+ALLOW_REGISTRATION = os.environ.get("ALLOW_REGISTRATION", "1").lower() not in ("0", "false", "no")
+# Require login for the legacy pages and sockets (/, /chart, /replay, /ws/*, /api/*).
+# Off by default until the new frontend lands; /api/v1 always requires auth.
+AUTH_REQUIRED = os.environ.get("AUTH_REQUIRED", "0").lower() not in ("0", "false", "no")
+# Comma-separated origins allowed to call the API cross-origin (empty = same-origin only).
+CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
+MAX_REQUEST_BYTES = int(os.environ.get("MAX_REQUEST_BYTES", 1_000_000))
+# Public base URL, used in email links (verification, password reset).
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "http://127.0.0.1:8000")
+
 # Evidence-collection pipeline for reverse-engineering Vtrender's trade
 # classification (see TRADE_CLASSIFICATION.md). Logs one observation per
 # classified trade; review_cli.py verifies against Vtrender separately

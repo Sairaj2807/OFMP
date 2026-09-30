@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Verify email · OFMP</title>
+  <link rel="stylesheet" href="/static/auth.css">
+</head>
+<body>
+<main>
+  <h1>Email verification</h1>
+  <div id="msg" role="status" aria-live="polite">Verifying…</div>
+  <div class="links"><a href="/login">Continue to sign in</a></div>
+</main>
+<script src="/static/auth.js"></script>
+<script>
+  const msg = document.getElementById("msg");
+  const token = new URLSearchParams(location.search).get("token");
+  if (!token) setMessage(msg, "This link is missing its token.", "error");
+  else api("/api/v1/auth/verify-email", { token }).then((r) =>
+    setMessage(msg, r.ok ? "Your email address is verified." : errorText(r), r.ok ? "ok" : "error"));
+</script>
+</body>
+</html>

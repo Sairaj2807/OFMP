@@ -5,6 +5,8 @@
     python -m backend.app.cli import-ticks [--date D]      data/ticks archive -> raw_ticks (idempotent)
     python -m backend.app.cli reconcile [--date D]         compare JSONL trade counts with the database
     python -m backend.app.cli db-status                    row counts per table / session
+    python -m backend.app.cli create-user --email E --role admin   create a verified user (password prompted,
+                                                           or read from the env var named by --password-env)
 
 Database commands need DATABASE_URL (environment or .env)."""
 import argparse
@@ -132,6 +134,30 @@ async def _db_status(args) -> int:
     return 0
 
 
+async def _create_user(args) -> int:
+    import getpass
+
+    from backend.app.core.errors import AppError
+    from backend.app.infrastructure.postgres.database import create_engine
+    from backend.app.services.auth.email import MemoryEmailSender
+    from backend.app.services.auth.service import AuthService
+
+    password = os.environ.get(args.password_env) if args.password_env else getpass.getpass("Password: ")
+    if not password:
+        sys.exit("no password given")
+    engine = create_engine(_require_db())
+    try:
+        svc = AuthService(engine, "unused-for-user-creation", MemoryEmailSender(), config.PUBLIC_BASE_URL)
+        user_id = await svc.create_user(args.email, password, args.role, args.name)
+    except AppError as e:
+        print(f"error: {e.message}")
+        return 1
+    finally:
+        await engine.dispose()
+    print(f"created {args.role} {args.email} ({user_id})")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="python -m backend.app.cli", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -145,6 +171,13 @@ def main(argv=None) -> int:
         p.add_argument("--ticks-dir", default=config.TICKS_DIR)
         p.set_defaults(func=lambda a, fn=fn: asyncio.run(fn(a)))
     sub.add_parser("db-status", help="row counts").set_defaults(func=lambda a: asyncio.run(_db_status(a)))
+    from backend.app.core.permissions import ROLES
+    p = sub.add_parser("create-user", help="create a verified user (e.g. the first admin)")
+    p.add_argument("--email", required=True)
+    p.add_argument("--role", choices=ROLES, default="user")
+    p.add_argument("--name")
+    p.add_argument("--password-env", help="read the password from this environment variable instead of prompting")
+    p.set_defaults(func=lambda a: asyncio.run(_create_user(a)))
     args = parser.parse_args(argv)
     return args.func(args)
 

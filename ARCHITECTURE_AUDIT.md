@@ -660,3 +660,75 @@ Still open:
 - Removing the JSONL dual-write.
 - The observation JSONL append is still synchronous on the event loop. It goes away with the
   dual-write rather than being rewritten.
+
+
+## 18. Phase 4 status
+
+Done on 2026-09-30, on branch `phase4-api-auth` (stacked on `phase3-persistence`). See `docs/api.md`.
+
+**Core** (`backend/app/core/`):
+- JSON or text structured logging, with the request ID and user ID on every line and known secret keys
+  redacted
+- the standard error envelope; unexpected errors never leak details
+- request-ID and body-size middleware (pure ASGI, so WebSockets are covered too)
+- Argon2id password hashing
+- HS256 access tokens that reject `alg=none`, the wrong type, tampering and expiry
+- opaque tokens stored only as SHA-256
+- double-submit CSRF
+- roles and permissions defined in code
+- a sliding-window rate limiter
+
+**Database.** Migration `0002` adds `organizations`, `users`, `organization_members`, `user_sessions`,
+`refresh_tokens`, `email_tokens` and `audit_logs`. Every user gets a personal organization at
+registration.
+
+**Auth service:**
+- register without revealing whether an email exists, plus email verification
+- login with equal work for unknown emails
+- rotating refresh tokens with reuse detection, which revokes the session
+- logout, log out everywhere, and per-session revocation with an ownership check
+- password reset, which revokes all sessions
+- password change, which revokes other sessions
+- audit log for security actions
+
+*Bug caught during implementation:* raising inside the transaction would have rolled back the
+failed-login audit row and the reuse revocation. Both now raise after commit, and tests pin this.
+
+**API** (`/api/v1`):
+- auth and account routes
+- market status and contracts
+- admin users (cursor pagination) and system
+- `/health`, `/ready`, `/live`
+- HttpOnly cookie sessions: access cookie SameSite=Lax; refresh cookie SameSite=Strict, scoped to
+  `/api/v1/auth`
+- Bearer tokens for API clients
+- per-IP and per-account rate limits
+- OpenAPI docs at `/api/docs` (hidden in production)
+
+**`/ws/v1/stream`:**
+- Origin check against cross-site WebSocket hijacking
+- auth by cookie or first message
+- `market.read` required
+- validated subscribe messages, restricted to the active contract
+- per-message `seq` and `ts`
+- heartbeats with idle close
+- session re-checked every 15 s (a revoked login is disconnected)
+- connection limits: 5 per user, 1000 total
+- constant-memory backpressure (only the latest snapshot is kept)
+
+**Legacy.** `AUTH_REQUIRED=1` puts `/`, `/chart`, `/replay`, `/api/*` and `/ws/frontend|chart` behind
+login, with a login page. With it on, switching the live contract needs `admin.system`. It is off by
+default, so the current pages keep working unchanged.
+
+**Tooling.** `python -m backend.app.cli create-user` bootstraps the first admin; the password is never
+taken from command-line arguments.
+
+Still open:
+
+- An email provider (development logs the links).
+- Redis-backed rate limits for multi-process deployments.
+- OAuth, 2FA and passkeys.
+- Security-event emails (new login, password changed).
+- Entitlements, plans and billing tables.
+- Legacy sockets are only checked at connect time, not re-checked like `/ws/v1/stream`.
+- The new frontend (Phase 5) will use `/ws/v1/stream` and `/api/v1`.

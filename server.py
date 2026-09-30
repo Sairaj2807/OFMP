@@ -23,6 +23,8 @@ from observation_store import (ObservationStore, list_replayable_sessions,
 from orderbook_engine import (TickProcessorState, group_candle_timestamps, group_native_bars,
                               poc_from_rows, process_tick, stacked_imbalances_from_rows,
                               value_area_from_rows)
+from backend.app.api.app import configure_api, start_api
+from backend.app.core.logging import configure_logging
 from backend.app.domain.market_data import MarketTick
 from backend.app.domain.orderflow import Trade, restore_trades
 from backend.app.infrastructure.postgres.database import create_engine as create_db_engine
@@ -41,7 +43,22 @@ class NoCacheStaticFiles(StaticFiles):
         return resp
 
 
-app = FastAPI()
+configure_logging(config.LOG_FORMAT)
+
+app = FastAPI(
+    title="OFMP — Order-Flow Market Platform",
+    version="0.4.0",
+    description="Live NIFTY futures order flow. Versioned API under /api/v1; errors use "
+                '{"error": {"code", "message", "request_id"}}. Browser clients authenticate with '
+                "HttpOnly cookies (unsafe requests must send X-CSRF-Token = the ofmp_csrf cookie); "
+                "API clients may send Authorization: Bearer <access token>.",
+    docs_url="/api/docs" if config.ENVIRONMENT != "production" else None,
+    redoc_url=None,
+    openapi_url="/api/openapi.json" if config.ENVIRONMENT != "production" else None,
+)
+configure_api(app, environment=config.ENVIRONMENT, cookie_secure=config.COOKIE_SECURE,
+              cors_origins=config.CORS_ORIGINS, max_request_bytes=config.MAX_REQUEST_BYTES,
+              legacy_auth_required=config.AUTH_REQUIRED)
 
 STATE = {
     "contract": None,
@@ -204,6 +221,14 @@ async def startup():
         print(f"[server] Logging trade observations to {config.SESSIONS_DIR}/<date>/observations.jsonl "
               f"(review live or later via review_cli.py, or visually via /replay)")
 
+    app.state.stream_task = start_api(
+        app, db_engine=STATE["db_engine"], jwt_secret=config.JWT_SECRET, public_base_url=config.PUBLIC_BASE_URL,
+        access_ttl_sec=config.ACCESS_TOKEN_TTL_SEC, refresh_ttl_sec=config.REFRESH_TOKEN_TTL_SEC,
+        allow_registration=config.ALLOW_REGISTRATION, gateway=ServerMarketGateway(),
+        allowed_intervals=config.ALLOWED_CHART_INTERVALS_SEC)
+    if app.state.auth_service is None:
+        print("[server] /api/v1 auth disabled: needs DATABASE_URL and JWT_SECRET")
+
     await _activate_contract(await _resolve_default_contract())
 
     app.state.broadcast_task = asyncio.create_task(_broadcast_loop())
@@ -214,7 +239,8 @@ async def shutdown():
     ws_client = STATE.get("ws_client")
     if ws_client:
         ws_client.stop()
-    for t in (getattr(app.state, "ws_task", None), getattr(app.state, "broadcast_task", None)):
+    for t in (getattr(app.state, "ws_task", None), getattr(app.state, "broadcast_task", None),
+              getattr(app.state, "stream_task", None)):
         if t:
             t.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -593,6 +619,44 @@ async def replay_page():
 @app.get("/chart")
 async def chart_page():
     return FileResponse("static/orderflow.html")
+
+
+@app.get("/login", include_in_schema=False)
+async def login_page():
+    return FileResponse("static/login.html")
+
+
+@app.get("/reset-password", include_in_schema=False)
+async def reset_password_page():
+    return FileResponse("static/reset-password.html")
+
+
+@app.get("/verify-email", include_in_schema=False)
+async def verify_email_page():
+    return FileResponse("static/verify-email.html")
+
+
+class ServerMarketGateway:
+    """The live engine, as the /api/v1 layer sees it (backend/app/api/gateway.py)."""
+
+    def active_contract(self) -> Optional[dict]:
+        return STATE.get("contract")
+
+    def feed_status(self) -> Optional[dict]:
+        health = _feed_health()
+        if health is None:
+            return None
+        return {**health, "connected": STATE["connected"], "error": STATE["last_error"]}
+
+    def database_stats(self) -> Optional[dict]:
+        writer = STATE.get("db_writer")
+        return writer.stats() if writer else None
+
+    async def list_contracts(self) -> list:
+        return await _list_candidate_contracts()
+
+    def chart_snapshot(self, ppr: int, interval_sec: int) -> dict:
+        return _build_chart_snapshot(ppr, interval_sec)
 
 
 async def _push_snapshots(clients: dict, build) -> None:
