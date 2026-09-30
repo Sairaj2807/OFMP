@@ -108,9 +108,9 @@ jobs:
       - run: docker build --target runtime -t ofmp-backend:ci .
       - run: docker build -f deploy/nginx/Dockerfile -t ofmp-nginx:ci .
       - name: Image vulnerabilities (Trivy, fixable HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with: { image-ref: "ofmp-backend:ci", severity: "HIGH,CRITICAL", ignore-unfixed: true, exit-code: "1" }
-      - uses: aquasecurity/trivy-action@0.28.0
+      - uses: aquasecurity/trivy-action@v0.36.0
         with: { image-ref: "ofmp-nginx:ci", severity: "HIGH,CRITICAL", ignore-unfixed: true, exit-code: "1" }
 
   secrets:
