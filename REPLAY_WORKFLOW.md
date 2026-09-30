@@ -69,7 +69,7 @@ Backing endpoints (all read-only, never touch the live engine):
 ## Time-sync anchor
 
 `ts_ms` in every observation is Angel One's `ltt` (last-traded-time, exchange clock — see
-[ws_ingest.py](ws_ingest.py)). Vtrender's replay should also be keyed to exchange time. Before trusting
+[the Angel One parser](backend/app/infrastructure/providers/angelone/parser.py)). Vtrender's replay should also be keyed to exchange time. Before trusting
 a whole session's alignment, sanity-check 3-4 unambiguous prints (large size, clean up/downticks)
 against what Vtrender's replay clock shows at that exact print. If there's a constant offset (feed
 latency, clock skew), it should show up as the same delta on all four — note it and mentally adjust,

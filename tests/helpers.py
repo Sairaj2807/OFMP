@@ -3,7 +3,7 @@
 The real-data-shaped tests run on a synthetic Angel One session generated
 here from a fixed seed — no saved session file is needed, and the result is
 identical on every run. Ticks go through the real engine (process_tick's
-inferred-side path), exactly as live ticks from ws_ingest.py do."""
+inferred-side path), exactly as live Angel One ticks do."""
 import random
 
 import orderbook_engine as oe

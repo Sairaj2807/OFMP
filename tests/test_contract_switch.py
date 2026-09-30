@@ -1,12 +1,13 @@
 """server.py's contract switcher: _activate_contract, _on_tick's per-record
 symbol tagging, and the /api/contracts + /api/contract endpoints. A fake ws
-client stands in for AngelWebSocketClient so nothing here
+feed stands in for the live feed (server.LiveFeed) so nothing here
 touches the network."""
 import asyncio
 
 import pytest
 
 import server
+from backend.app.domain.market_data import DepthLevel, MarketTick
 
 
 def run(coro):
@@ -14,7 +15,7 @@ def run(coro):
 
 
 class FakeWsClient:
-    """Mirrors AngelWebSocketClient's shape (run()/stop()) but
+    """Mirrors the live feeds' shape (run()/stop()) but
     never opens a real connection -- run() just blocks until cancelled, the
     same way the real clients block inside their own reconnect loop."""
     instances = []
@@ -40,7 +41,7 @@ class FakeWsClient:
 @pytest.fixture(autouse=True)
 def fake_clients(monkeypatch):
     FakeWsClient.instances = []
-    monkeypatch.setattr(server, "AngelWebSocketClient", FakeWsClient)
+    monkeypatch.setattr(server, "LiveFeed", FakeWsClient)
     yield
     # tear down any task _activate_contract left running so tests don't leak
     task = getattr(server.app.state, "ws_task", None)
@@ -132,8 +133,10 @@ class FakeStore:
 
 
 def make_tick(ltp=100.0, ltt=1_700_000_000_000, cum_volume=65):
-    return {"ltp": ltp, "ltt": ltt, "cum_volume": cum_volume,
-            "depth_buy": [(99.9, 65, 1)], "depth_sell": [(100.1, 65, 1)]}
+    return MarketTick(provider="angelone", token="111", exchange_segment="NFO", sequence=None,
+                      exchange_ts_ms=ltt, last_trade_ts_ms=ltt, received_ts_ms=ltt, ltp=ltp,
+                      last_traded_qty=None, cumulative_volume=cum_volume,
+                      bids=(DepthLevel(99.9, 65, 1),), asks=(DepthLevel(100.1, 65, 1),))
 
 
 def test_on_tick_tags_the_active_symbol():
@@ -214,3 +217,19 @@ def test_api_switch_contract_angel_unknown_token_leaves_state_untouched(monkeypa
 def test_api_switch_contract_angel_missing_token_is_rejected():
     result = run(server.api_switch_contract(server.ContractSwitchRequest()))
     assert result["ok"] is False and "token" in result["error"]
+
+
+# ---- LiveFeed selection -------------------------------------------------------------
+
+def test_live_feed_follows_ingest_mode(monkeypatch):
+    from backend.app.services.market_data.feeds import EmbeddedFeed, RedisFeed
+    monkeypatch.undo()                      # use the real LiveFeed, not the fixture's fake
+    import config
+    c = contract()
+    monkeypatch.setattr(config, "INGEST_MODE", "embedded")
+    monkeypatch.setattr(config, "RECORD_RAW_TICKS", False)
+    feed = server.LiveFeed(c, on_tick=lambda t: None, on_status=lambda **kw: None)
+    assert isinstance(feed, EmbeddedFeed) and feed.recorder is None
+    assert feed.instrument.token == "111" and feed.instrument.exchange_segment == "NFO"
+    monkeypatch.setattr(config, "INGEST_MODE", "redis")
+    assert isinstance(server.LiveFeed(c, on_tick=lambda t: None, on_status=lambda **kw: None), RedisFeed)

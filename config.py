@@ -50,11 +50,6 @@ DEPTH_LEVELS = _orderflow.DEPTH_LEVELS  # Angel One Snap Quote gives best-5 only
 # are collected.
 VTRENDERS_STALE_QUOTE_MS = _orderflow.VTRENDER_STALE_QUOTE_MS
 
-# WebSocket
-WS_URL = "wss://smartapisocket.angelone.in/smart-stream"
-HEARTBEAT_INTERVAL_SEC = 30
-RECONNECT_DELAY_SEC = 3
-
 # REST
 BASE_URL = "https://apiconnect.angelone.in"
 INSTRUMENT_MASTER_URL = "https://margincalculator.angelone.in/OpenAPI_File/files/OpenAPIScripMaster.json"
@@ -73,15 +68,6 @@ INSTRUMENT_TYPE = "FUTIDX"
 # instead — also overridable per-request via the /api/contract switcher.
 INSTRUMENT_EXPIRY_MONTH = os.environ.get("INSTRUMENT_EXPIRY_MONTH") or None
 
-# Exchange type codes for WebSocket subscription (per SmartAPI docs)
-EXCHANGE_TYPE_CODES = {
-    "NSE_CM": 1,
-    "NSE_FO": 2,
-    "BSE_CM": 3,
-    "BSE_FO": 4,
-    "MCX_FO": 5,
-}
-
 # Broadcast cadence to browser clients
 BROADCAST_INTERVAL_SEC = 0.5
 
@@ -91,10 +77,25 @@ INSTRUMENTS_CACHE_FILE = "instruments_cache.json"
 # ---------------------------------------------------------------------------
 # Data source
 # ---------------------------------------------------------------------------
-# Angel One Snap Quote (ws_ingest.py) is the only market-data source. Only a
-# single blended cumulative volume counter is available, so orderbook_engine's
-# heuristic classifier (TradeClassifier.classify — quote rule + tick rule)
-# infers trade side. See TRADE_CLASSIFICATION.md.
+# Angel One Snap Quote (backend/app/infrastructure/providers/angelone/) is
+# the only market-data provider. Only a single blended cumulative volume
+# counter is available, so trade side is inferred by the configured
+# classifier (backend/app/domain/orderflow/classification.py).
+
+# Ingestion mode:
+#   "embedded" (default) — the provider runs inside the API process; no Redis.
+#   "redis" — the ingest worker (python -m backend.app.workers.ingest) owns the
+#             broker connection and publishes ticks to Redis; the API consumes
+#             them. API restarts then leave the broker connection untouched.
+INGEST_MODE = os.environ.get("INGEST_MODE", "embedded")
+if INGEST_MODE not in ("embedded", "redis"):
+    raise ValueError(f"INGEST_MODE must be 'embedded' or 'redis', got {INGEST_MODE!r}")
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
+# Archive every normalized tick (quote-only updates included) under
+# data/ticks/<date>/ — the input needed to re-run the engine over a past
+# session. Recorded by whichever process holds the broker connection.
+RECORD_RAW_TICKS = os.environ.get("RECORD_RAW_TICKS", "1").lower() not in ("0", "false", "no")
 
 # Evidence-collection pipeline for reverse-engineering Vtrender's trade
 # classification (see TRADE_CLASSIFICATION.md). Logs one observation per
@@ -109,6 +110,7 @@ INSTRUMENTS_CACHE_FILE = "instruments_cache.json"
 COLLECT_OBSERVATIONS = True
 DATA_DIR = "data"
 SESSIONS_DIR = f"{DATA_DIR}/sessions"
+TICKS_DIR = f"{DATA_DIR}/ticks"
 VERIFIED_DATASET_CSV = f"{DATA_DIR}/verified_dataset.csv"
 
 # Local timezone the exchange timestamps (ltt) are effectively already in

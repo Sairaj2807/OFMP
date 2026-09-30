@@ -23,7 +23,9 @@ from observation_store import (ObservationStore, list_replayable_sessions,
 from orderbook_engine import (TickProcessorState, group_candle_timestamps, group_native_bars,
                               poc_from_rows, process_tick, stacked_imbalances_from_rows,
                               value_area_from_rows)
-from ws_ingest import AngelWebSocketClient
+from backend.app.domain.market_data import MarketTick
+from backend.app.services.market_data.feeds import EmbeddedFeed, RedisFeed
+from backend.app.services.market_data.recorder import RawTickRecorder
 
 class NoCacheStaticFiles(StaticFiles):
     """Forces the browser to always revalidate static assets instead of
@@ -55,17 +57,11 @@ def _on_status(connected: bool, error):
     STATE["last_error"] = error
 
 
-def _on_tick(tick: dict):
+def _on_tick(tick: MarketTick):
     engine: TickProcessorState = STATE["engine"]
     if engine is None:
         return
-    tick_in = {
-        "ltp": tick["ltp"],
-        "ltt": tick["ltt"],
-        "cum_volume": tick["cum_volume"],
-        "depth_buy": tick["depth_buy"],
-        "depth_sell": tick["depth_sell"],
-    }
+    tick_in = tick.to_engine_tick()
     obs_store = STATE.get("observation_store")
     sink = None
     if obs_store is not None:
@@ -80,7 +76,7 @@ def _on_tick(tick: dict):
         symbol = contract["tradingsymbol"] if contract else None
         sink = lambda obs, symbol=symbol: obs_store.log({**obs, "symbol": symbol})
     process_tick(engine, tick_in, observation_sink=sink)
-    engine.last_quote = tick  # keep the raw quote around for header display
+    engine.last_quote = tick  # keep the latest quote around for header display
 
 
 async def _resolve_angel_contract() -> dict:
@@ -95,8 +91,29 @@ async def _resolve_default_contract() -> dict:
     return await _resolve_angel_contract()
 
 
+_REDIS_BUS = None
+
+
+def _redis_bus():
+    global _REDIS_BUS
+    if _REDIS_BUS is None:
+        import redis.asyncio as aioredis
+
+        from backend.app.infrastructure.redis_bus import RedisMarketDataBus
+        _REDIS_BUS = RedisMarketDataBus(aioredis.from_url(config.REDIS_URL))
+    return _REDIS_BUS
+
+
+def LiveFeed(contract: dict, on_tick, on_status):
+    """The live feed for config.INGEST_MODE (see backend/app/services/market_data/feeds.py)."""
+    if config.INGEST_MODE == "redis":
+        return RedisFeed(contract, on_tick=on_tick, on_status=on_status, bus=_redis_bus())
+    recorder = RawTickRecorder(config.TICKS_DIR) if config.RECORD_RAW_TICKS else None
+    return EmbeddedFeed(contract, on_tick=on_tick, on_status=on_status, recorder=recorder)
+
+
 def _make_engine_and_client(contract: dict):
-    """A fresh TickProcessorState for `contract` and the matching ws client —
+    """A fresh TickProcessorState for `contract` and the matching live feed —
     built but not yet wired into STATE or started, so a caller (startup or a
     live switch) can prepare everything before tearing down whatever's
     running now. TickProcessorState is instrument-specific (tick size, and
@@ -105,7 +122,7 @@ def _make_engine_and_client(contract: dict):
     footprint/CVD history over, the same as a server restart would."""
     engine = TickProcessorState(contract["tick_size"])
     engine.last_quote = None
-    client = AngelWebSocketClient(contract, on_tick=_on_tick, on_status=_on_status)
+    client = LiveFeed(contract, on_tick=_on_tick, on_status=_on_status)
     return engine, client
 
 
@@ -237,8 +254,8 @@ def _quote_payload(engine: TickProcessorState) -> Optional[dict]:
     if not q:
         return None
     return {
-        "ltp": q["ltp"], "open": q["open"], "high": q["high"], "low": q["low"],
-        "close": q["close"], "volume": q["cum_volume"], "oi": q["open_interest"],
+        "ltp": q.ltp, "open": q.open, "high": q.high, "low": q.low,
+        "close": q.close, "volume": q.cumulative_volume, "oi": q.open_interest,
     }
 
 
@@ -618,7 +635,14 @@ async def api_status():
         "error": STATE["last_error"],
         "tick_count": STATE["engine"].tick_count if STATE["engine"] else 0,
         "uptime_sec": time.time() - STATE["started_at"],
+        "feed": _feed_health(),
     }
+
+
+def _feed_health() -> Optional[dict]:
+    feed = STATE.get("ws_client")
+    health = getattr(feed, "health", None)
+    return health() if callable(health) else None
 
 
 # ---------------------------------------------------------------------------

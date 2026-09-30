@@ -595,3 +595,34 @@ Still open:
 
 *Note: the request brief was truncated at §158 (threat model). Sections §158 onward were not
 received and are not reflected here.*
+
+## 16. Phase 2 status
+
+Done on 2026-09-30, on branch `phase2-market-data` (stacked on `phase1-domain-core`). See
+`docs/market-data.md`.
+
+- Canonical `MarketTick` keeps the sequence number, the exchange timestamp and the server receive
+  time. Previously the server discarded all three.
+- `MarketDataProvider` interface, with `AngelOneProvider` implementing it. The parser was verified
+  identical to the old `ws_ingest.py` on 2,000 random packets; `ws_ingest.py` is removed.
+- `ProviderRunner`:
+  - exponential backoff with jitter (replaces the fixed 3 s retry)
+  - resubscribe on reconnect
+  - health tracking
+  - data-quality events
+  - consumer isolation: an engine error no longer drops the broker connection
+- `INGEST_MODE`:
+  - `embedded` is the default and needs no infrastructure;
+  - `redis` runs a separate ingest worker publishing to Redis streams, which the API consumes. API
+    restarts no longer touch the broker connection.
+- Raw tick archive (`data/ticks/`): every tick, quote-only included, dated in IST regardless of the
+  host timezone, written off the event loop.
+- `GET /api/status` includes provider health.
+
+Still open:
+
+- `DEGRADED` detection needs the exchange calendar.
+- Restoring the live engine state after an API restart needs stored ticks (Phase 3).
+- The observation JSONL write is still synchronous on the event loop (Phase 3 replaces it).
+- Not exercised against the live Angel feed in this session: covered by unit tests with a fake
+  WebSocket, and by an end-to-end worker → Redis → API test on fakeredis.
