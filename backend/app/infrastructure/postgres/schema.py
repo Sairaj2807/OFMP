@@ -230,3 +230,33 @@ audit_logs = sa.Table(
     sa.Index("ix_audit_logs_occurred_at", sa.text("occurred_at DESC")),
     sa.Index("ix_audit_logs_actor_occurred_at", "actor_user_id", sa.text("occurred_at DESC")),
 )
+
+
+# ---------------------------------------------------------------------------
+# Workspaces (migration 0003)
+# ---------------------------------------------------------------------------
+# A workspace is the terminal's saved state: layout, per-chart settings,
+# units. `config` is versioned JSON owned by the frontend (config_version
+# lets a newer frontend migrate older saves); `revision` increments on every
+# update for optimistic concurrency (a stale write is rejected, not merged).
+
+workspaces = sa.Table(
+    "workspaces", metadata,
+    sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
+    sa.Column("owner_user_id", UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    sa.Column("organization_id", UUID(as_uuid=True), sa.ForeignKey("organizations.id", ondelete="CASCADE"),
+              nullable=False),
+    sa.Column("name", sa.Text, nullable=False),
+    sa.Column("config", JSONB, nullable=False),
+    sa.Column("config_version", sa.Integer, nullable=False),
+    sa.Column("revision", sa.Integer, nullable=False, server_default="1"),
+    sa.Column("is_default", sa.Boolean, nullable=False, server_default=sa.false()),
+    sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=NOW),
+    sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=NOW),
+    sa.Column("deleted_at", sa.DateTime(timezone=True)),
+    sa.CheckConstraint("length(name) BETWEEN 1 AND 80", name="name_length"),
+    sa.CheckConstraint("revision >= 1", name="revision_positive"),
+    sa.Index("ix_workspaces_owner_active", "owner_user_id", postgresql_where=sa.text("deleted_at IS NULL")),
+    sa.Index("uq_workspaces_owner_name_active", "owner_user_id", "name", unique=True,
+             postgresql_where=sa.text("deleted_at IS NULL")),
+)

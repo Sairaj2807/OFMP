@@ -43,3 +43,27 @@ describe("snapshot bus", () => {
     expect(bus.get("c1")).toBeUndefined();
   });
 });
+
+describe("config migration", () => {
+  it("upgrades a v1 layout without losing settings", async () => {
+    const { migrateConfig } = await import("./terminal");
+    const v1 = { layout: 4, activeChartId: "c3", units: "lots",
+                 charts: [{ id: "c1", interval: 300, ppr: 2, cellStyle: "ladder", displayMode: "delta",
+                            showPoc: false, showValueArea: true, showImbalances: true }] };
+    const out = migrateConfig(v1);
+    expect([out.layout, out.activeChartId, out.units]).toEqual([4, "c3", "lots"]);
+    expect(out.charts[0]).toMatchObject({ interval: 300, ppr: 2, cellStyle: "ladder", displayMode: "delta",
+                                          showPoc: false, mode: "live", replayDate: null });
+    expect(out.charts).toHaveLength(4);                      // missing charts filled from defaults
+  });
+
+  it("repairs invalid values field by field and never crashes on junk", async () => {
+    const { migrateConfig, initialTerminal } = await import("./terminal");
+    const out = migrateConfig({ layout: 3, units: "x", charts: [{ id: "c1", ppr: 99, mode: "replay", replayDate: "bad" }] });
+    expect(out.layout).toBe(initialTerminal.layout);
+    expect(out.units).toBe("qty");
+    expect(out.charts[0]).toMatchObject({ ppr: 1, mode: "live", replayDate: null });
+    expect(migrateConfig(null)).toEqual(initialTerminal);
+    expect(migrateConfig("garbage")).toEqual(initialTerminal);
+  });
+});

@@ -127,3 +127,37 @@ describe("StreamClient", () => {
     expect(snapshots).toEqual([]);
   });
 });
+
+describe("StreamClient replay", () => {
+  it("starts a replay, tracks the cursor from snapshots and resumes there after a reconnect", () => {
+    const { client, socket, timers, snapshots } = setup();
+    client.start();
+    socket().open();
+    client.replay("c1", "2026-09-29", { ppr: 1, interval: 60 }, { speed: 25, autoplay: true });
+    expect(socket().sent.at(-1)).toEqual({ action: "replay", id: "c1", date: "2026-09-29", ppr: 1, interval: 60,
+                                           speed: 25, autoplay: true });
+    socket().emit({ type: "snapshot", id: "c1", data: { ready: true, replay: { cursor_ms: 123456, playing: false } } });
+    socket().emit({ type: "snapshot", id: "c1", data: { ready: true } });          // stale live snapshot: ignored
+    expect(snapshots).toHaveLength(1);
+    socket().close(1006);
+    timers.shift()!();
+    socket().open();
+    expect(socket().sent.at(-1)).toEqual({ action: "replay", id: "c1", date: "2026-09-29", ppr: 1, interval: 60,
+                                           speed: 25, autoplay: false, at_ms: 123456 });
+  });
+
+  it("same-day settings changes keep speed and position; controls go to the server", () => {
+    const { client, socket } = setup();
+    client.start();
+    socket().open();
+    client.replay("c1", "2026-09-29", { ppr: 1, interval: 60 }, { speed: 5 });
+    socket().emit({ type: "snapshot", id: "c1", data: { ready: true, replay: { cursor_ms: 99, playing: true } } });
+    client.replay("c1", "2026-09-29", { ppr: 2, interval: 300 });
+    expect(socket().sent.at(-1)).toMatchObject({ action: "replay", ppr: 2, interval: 300, speed: 5, autoplay: true, at_ms: 99 });
+    client.replayControl("c1", "step", { unit: "candle" });
+    expect(socket().sent.at(-1)).toEqual({ action: "replay_control", id: "c1", command: "step", unit: "candle" });
+    client.subscribe("c1", { ppr: 1, interval: 60 });                                  // back to live
+    client.replayControl("c1", "play");                                                 // no-op when live
+    expect(socket().sent.at(-1)).toMatchObject({ action: "subscribe", id: "c1" });
+  });
+});

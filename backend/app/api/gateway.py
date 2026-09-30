@@ -19,3 +19,12 @@ class MarketGateway(Protocol):
 
     def chart_snapshot(self, ppr: int, interval_sec: int) -> dict:
         """The live order-flow chart snapshot for these display settings."""
+
+    async def replay_sessions(self) -> list:
+        """[{date, trades}] of stored sessions available for replay."""
+
+    async def open_replay(self, date: str):
+        """A ReplaySession for that date (raises if nothing is stored)."""
+
+    def replay_snapshot(self, session, ppr: int, interval_sec: int) -> dict:
+        """A chart snapshot of the replay's current position (with data.replay meta)."""

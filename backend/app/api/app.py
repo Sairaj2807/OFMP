@@ -23,6 +23,7 @@ from backend.app.services.auth.service import AuthService
 from .deps import ACCESS_COOKIE
 from .routes.auth import router as auth_router
 from .routes.platform import admin_router, health_router, market_router
+from .routes.workspaces import router as workspaces_router
 from .websocket.stream import StreamHub
 
 
@@ -104,7 +105,7 @@ def configure_api(app: FastAPI, *, environment: str, cookie_secure: bool, cors_o
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=max_request_bytes)
     app.add_middleware(RequestContextMiddleware)
     install_error_handlers(app)
-    for router in (health_router, auth_router, market_router, admin_router):
+    for router in (health_router, auth_router, market_router, admin_router, workspaces_router):
         app.include_router(router)
 
     app.state.environment = environment
@@ -112,6 +113,7 @@ def configure_api(app: FastAPI, *, environment: str, cookie_secure: bool, cors_o
     app.state.cors_origins = list(cors_origins)
     app.state.limiters = default_limiters()
     app.state.auth_service = None
+    app.state.workspace_service = None
     app.state.db_engine = None
     app.state.market = None
     app.state.stream_hub = None
@@ -142,6 +144,9 @@ def start_api(app: FastAPI, *, db_engine, jwt_secret: Optional[str], public_base
         app.state.auth_service = AuthService(
             db_engine, jwt_secret, email_sender or LogEmailSender(app.state.environment), public_base_url,
             access_ttl_sec=access_ttl_sec, refresh_ttl_sec=refresh_ttl_sec, allow_registration=allow_registration)
+    if db_engine is not None:
+        from backend.app.services.workspaces import WorkspaceService
+        app.state.workspace_service = WorkspaceService(db_engine)
 
     async def authenticate(token):
         svc = app.state.auth_service

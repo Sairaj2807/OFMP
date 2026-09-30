@@ -82,3 +82,21 @@ async def load_session_tape(engine: AsyncEngine, provider: str, symbol: str, ses
         tape = [(dt_to_ms(ts), price, qty, side) for ts, price, qty, side in (await conn.execute(tape_stmt)).all()]
         last = (await conn.execute(last_stmt)).first()
     return tape, (tuple(last) if last else (None, None))
+
+
+async def load_trades_by_date(engine: AsyncEngine, provider: str, session_date: date) -> list:
+    """Every stored trade of one session, oldest first, as observation dicts
+    (features + trade_id + ts_ms) — the input replay needs. Includes sessions
+    recorded before trades were tagged with a symbol."""
+    stmt = (sa.select(trades.c.features, trades.c.trade_seq, trades.c.trade_ts)
+            .where(trades.c.provider == provider, trades.c.session_date == session_date)
+            .order_by(trades.c.trade_ts, trades.c.trade_seq))
+    async with engine.connect() as conn:
+        rows = (await conn.execute(stmt)).all()
+    out = []
+    for features, seq, ts in rows:
+        obs = dict(features)
+        obs["trade_id"] = seq
+        obs["ts_ms"] = dt_to_ms(ts)
+        out.append(obs)
+    return out

@@ -65,6 +65,38 @@ export interface ChartSnapshot {
     oi: number | null;
   } | null;
   chart?: { row_size: number; interval_sec: number; cvd_offset: number; bars: EngineBar[] };
+  replay?: ReplayMeta;
+}
+
+export interface ReplayMeta {
+  date: string;
+  start_ms: number;
+  end_ms: number;
+  cursor_ms: number;
+  index: number;
+  total: number;
+  playing: boolean;
+  speed: number;
+  speeds: number[];
+}
+
+export interface ReplaySessionInfo {
+  date: string;
+  trades: number | null;
+}
+
+export interface WorkspaceSummary {
+  id: string;
+  name: string;
+  config_version: number;
+  revision: number;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Workspace extends WorkspaceSummary {
+  config: Record<string, unknown>;
 }
 
 export interface ChartSettings {
@@ -73,7 +105,7 @@ export interface ChartSettings {
 }
 
 export interface ServerMessage {
-  type: "welcome" | "subscribed" | "unsubscribed" | "snapshot" | "ping" | "pong" | "error";
+  type: "welcome" | "subscribed" | "replay_started" | "unsubscribed" | "snapshot" | "ping" | "pong" | "error";
   seq: number;
   ts: number;
   id?: string;

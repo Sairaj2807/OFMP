@@ -350,3 +350,81 @@ def test_metrics_endpoint_exposes_series_with_bounded_route_labels():
         assert name in body
     assert 'route="/live"' in body
     assert "00000000-0000-0000-0000-000000000001" not in body
+
+
+# ---- replay over the stream -----------------------------------------------------------------------
+
+REPLAY_RECORDS = [{"ts_ms": 1_790_653_500_000 + i * 20_000, "ltp": 100.0 + (i % 3) / 10, "qty": 65,
+                   "algo_side": "BUY" if i % 2 else "SELL", "trade_id": i + 1} for i in range(12)]
+
+
+class ReplayGateway(FakeGateway):
+    async def replay_sessions(self):
+        return [{"date": "2026-09-29", "trades": len(REPLAY_RECORDS)}]
+
+    async def open_replay(self, date):
+        from backend.app.services.replay import ReplaySession
+        if date != "2026-09-29":
+            raise ValueError(f"no trades recorded on {date}")
+        return ReplaySession(date, REPLAY_RECORDS, 0.1)
+
+    def replay_snapshot(self, session, ppr, interval):
+        return {"ready": True, "mode": "replay", "ppr": ppr, "interval": interval, "replay": session.meta()}
+
+
+def next_of(ws, type_):
+    while True:
+        m = ws.receive_json()
+        if m["type"] == type_:
+            return m
+
+
+def test_ws_replay_start_controls_and_back_to_live():
+    app, _ = ws_app({"good-token-123": user()}, gateway=ReplayGateway())
+    c = TestClient(app)
+    c.cookies.set("ofmp_access", "good-token-123")
+    with c.websocket_connect("/ws/v1/stream") as ws:
+        ws.receive_json()
+        ws.send_json({"action": "replay", "id": "c1", "date": "2026-09-29", "interval": 60, "speed": 5, "autoplay": False})
+        started = next_of(ws, "replay_started")
+        assert started["id"] == "c1" and started["data"]["total"] == 12 and started["data"]["speed"] == 5
+        snap = next_of(ws, "snapshot")
+        assert snap["data"]["mode"] == "replay" and snap["data"]["replay"]["index"] == 0
+
+        ws.send_json({"action": "replay_control", "id": "c1", "command": "step", "unit": "trade"})
+        assert next_of(ws, "snapshot")["data"]["replay"]["index"] == 1
+        ws.send_json({"action": "replay_control", "id": "c1", "command": "seek", "value": REPLAY_RECORDS[6]["ts_ms"]})
+        assert next_of(ws, "snapshot")["data"]["replay"]["index"] == 7
+        ws.send_json({"action": "replay_control", "id": "c1", "command": "speed", "value": 3})
+        assert next_of(ws, "error")["data"]["code"] == "INVALID_CONTROL"
+        ws.send_json({"action": "replay", "id": "c1", "date": "2026-09-29", "ppr": 3, "interval": 300})
+        kept = next_of(ws, "snapshot")["data"]
+        assert kept["replay"]["index"] == 7 and kept["ppr"] == 3             # same day: position kept
+
+        ws.send_json({"action": "subscribe", "id": "c1", "streams": ["chart"], "interval": 60})   # back to live
+        assert next_of(ws, "subscribed")["id"] == "c1"
+        assert "replay" not in next_of(ws, "snapshot")["data"]
+        ws.send_json({"action": "replay_control", "id": "c1", "command": "play"})
+        assert next_of(ws, "error")["data"]["code"] == "NO_REPLAY"
+
+
+def test_ws_replay_errors_and_limits():
+    app, _ = ws_app({"good-token-123": user()}, gateway=ReplayGateway())
+    c = TestClient(app)
+    c.cookies.set("ofmp_access", "good-token-123")
+    with c.websocket_connect("/ws/v1/stream") as ws:
+        ws.receive_json()
+        ws.send_json({"action": "replay", "id": "c1", "date": "2020-01-01"})
+        err = next_of(ws, "error")
+        assert err["data"]["code"] == "REPLAY_UNAVAILABLE" and "2020-01-01" in err["data"]["message"]
+        ws.send_json({"action": "replay", "id": "c1", "date": "not-a-date"})
+        assert next_of(ws, "error")["data"]["code"] == "INVALID_MESSAGE"
+        for sid in ("r1", "r2", "r3"):
+            ws.send_json({"action": "replay", "id": sid, "date": "2026-09-29", "autoplay": False})
+        assert next_of(ws, "error")["data"]["code"] == "TOO_MANY_REPLAYS"
+
+
+def test_replay_sessions_endpoint_requires_market_read():
+    app, _ = ws_app({}, gateway=ReplayGateway())
+    app.state.market = ReplayGateway()
+    assert TestClient(app).get("/api/v1/market/replay/sessions").status_code == 503   # no auth service here

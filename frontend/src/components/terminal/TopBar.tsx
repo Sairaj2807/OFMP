@@ -1,9 +1,12 @@
 "use client";
 
+import { useEffect } from "react";
+
 import { Button, Kbd, StatusDot, type DotState } from "@/components/ui/controls";
 import type { StreamStatus } from "@/lib/stream";
 import { useSession } from "@/stores/session";
 import { useTerminal, type Layout } from "@/stores/terminal";
+import { WorkspaceMenu } from "./WorkspaceMenu";
 
 function connection(stream: StreamStatus, feedConnected: boolean, feedError: string | null): { state: DotState; label: string } {
   if (stream === "open") {
@@ -24,6 +27,13 @@ export function TopBar({ onOpenPalette, onLogout }: { onOpenPalette: () => void;
   const units = useTerminal((s) => s.units);
   const setUnits = useTerminal((s) => s.setUnits);
   const conn = connection(stream, feed.connected, feed.error);
+  const notice = useSession((s) => s.notice);
+  const setNotice = useSession((s) => s.setNotice);
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 8000);
+    return () => clearTimeout(t);
+  }, [notice, setNotice]);
 
   return (
     <header className="flex h-10 shrink-0 items-center gap-3 border-b border-line bg-panel px-3">
@@ -32,6 +42,12 @@ export function TopBar({ onOpenPalette, onLogout }: { onOpenPalette: () => void;
       <span className="num text-[13px] text-fg" aria-label="Active contract">{feed.symbol ?? "—"}</span>
       <span title={feed.error ?? undefined}><StatusDot state={conn.state} label={conn.label} /></span>
 
+      {notice && (
+        <div role="status" className="flex items-center gap-2 rounded border border-warn/40 bg-warn/10 px-2 py-0.5 text-[12px] text-warn">
+          {notice}
+          <button type="button" aria-label="Dismiss" onClick={() => setNotice(null)} className="text-warn/80 hover:text-warn">×</button>
+        </div>
+      )}
       <div className="ml-auto flex items-center gap-1" role="group" aria-label="Chart layout">
         {([1, 2, 4] as Layout[]).map((n) => (
           <Button key={n} active={layout === n} onClick={() => setLayout(n)} aria-label={`${n} chart${n > 1 ? "s" : ""}`}>
@@ -43,6 +59,7 @@ export function TopBar({ onOpenPalette, onLogout }: { onOpenPalette: () => void;
         <Button active={units === "qty"} onClick={() => setUnits("qty")}>Qty</Button>
         <Button active={units === "lots"} onClick={() => setUnits("lots")} title={`1 lot = ${feed.lotSize}`}>Lots</Button>
       </div>
+      <WorkspaceMenu />
       <button
         type="button"
         onClick={onOpenPalette}

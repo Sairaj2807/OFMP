@@ -8,6 +8,7 @@ import contextlib
 import json
 import os
 import time
+from datetime import date as date_cls
 from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -30,7 +31,9 @@ from backend.app.domain.market_data import MarketTick
 from backend.app.infrastructure.providers.synthetic import SYNTHETIC_CONTRACT, SyntheticProvider
 from backend.app.domain.orderflow import Trade, restore_trades
 from backend.app.infrastructure.postgres.database import create_engine as create_db_engine
-from backend.app.infrastructure.postgres.repositories import load_session_tape, upsert_instrument
+from backend.app.infrastructure.postgres.repositories import (load_session_tape, load_trades_by_date,
+                                                              trade_counts_by_session, upsert_instrument)
+from backend.app.services.replay import ReplayLibrary, ReplaySession
 from backend.app.infrastructure.postgres.rows import ist_date
 from backend.app.infrastructure.postgres.writer import MarketDataWriter
 from backend.app.services.market_data.feeds import EmbeddedFeed, RedisFeed
@@ -670,6 +673,64 @@ class ServerMarketGateway:
 
     def chart_snapshot(self, ppr: int, interval_sec: int) -> dict:
         return _build_chart_snapshot(ppr, interval_sec)
+
+    # -- replay (server-side, same aggregation code as live) --------------------------
+
+    async def replay_sessions(self) -> list:
+        return await _replay_library().sessions()
+
+    async def open_replay(self, date: str) -> ReplaySession:
+        records = await _replay_library().records(date)
+        if not records:
+            raise ValueError(f"no trades recorded on {date}")
+        contract = STATE.get("contract")
+        return ReplaySession(date, records, contract["tick_size"] if contract else 0.1)
+
+    def replay_snapshot(self, session: ReplaySession, ppr: int, interval_sec: int) -> dict:
+        state = session.state
+        contract = STATE.get("contract") or {}
+        last = state.last_observation
+        return {
+            "ready": True,
+            "mode": "replay",
+            "source": _source_info(),
+            "status": {"connected": True, "error": None, "tick_count": session.index, "symbol":
+                       (last or {}).get("symbol") or f"Replay {session.date}",
+                       "tick_size": session.tick_size, "lot_size": contract.get("lotsize", 65)},
+            "book": _book_payload(state.book),
+            "quote": {"ltp": last["ltp"], "open": None, "high": None, "low": None, "close": None,
+                      "volume": last.get("cum_volume") or 0, "oi": None} if last else None,
+            "chart": _chart_payload(state.footprint, state.cvd_tracker.cvd, state.last_candle_seen, ppr,
+                                    interval_sec=_clamp_chart_interval(interval_sec)),
+            "replay": session.meta(),
+        }
+
+
+_REPLAY_LIBRARY: Optional[ReplayLibrary] = None
+
+
+def _replay_library() -> ReplayLibrary:
+    """Stored sessions for replay: the database when configured, else the
+    JSONL session folders."""
+    global _REPLAY_LIBRARY
+    if _REPLAY_LIBRARY is None:
+        db = STATE.get("db_engine")
+        if db is not None:
+            async def loader(date_str):
+                return await load_trades_by_date(db, "angelone", date_cls.fromisoformat(date_str))
+
+            async def lister():
+                counts = await trade_counts_by_session(db, provider="angelone")
+                return [{"date": d.isoformat(), "trades": n} for d, n in sorted(counts.items())]
+        else:
+            async def loader(date_str):
+                return await asyncio.to_thread(load_session_records, date_str)
+
+            async def lister():
+                dates = await asyncio.to_thread(list_replayable_sessions)
+                return [{"date": d, "trades": None} for d in dates]
+        _REPLAY_LIBRARY = ReplayLibrary(loader, lister)
+    return _REPLAY_LIBRARY
 
 
 async def _push_snapshots(clients: dict, build) -> None:

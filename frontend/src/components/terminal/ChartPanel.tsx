@@ -8,6 +8,7 @@ import { type ChartStats, useLiveStats } from "@/hooks/useLiveStream";
 import { intervalLabel } from "@/lib/format";
 import { useSession } from "@/stores/session";
 import { type CellStyle, type ChartConfig, type DisplayMode, useTerminal } from "@/stores/terminal";
+import { ReplayBar, loadReplaySessions } from "./ReplayBar";
 
 export function ChartPanel({ config }: { config: ChartConfig }) {
   const intervals = useSession((s) => s.intervals);
@@ -19,6 +20,16 @@ export function ChartPanel({ config }: { config: ChartConfig }) {
   const update = useTerminal((s) => s.updateChart);
   const setStats = useLiveStats((s) => s.set);
   const onStats = useCallback((st: ChartStats | null) => setStats(config.id, st), [config.id, setStats]);
+  const setNotice = useSession((s) => s.setNotice);
+
+  const toReplay = async () => {
+    const date = config.replayDate ?? (await loadReplaySessions())[0]?.date;
+    if (!date) {
+      setNotice("No recorded sessions to replay yet.");
+      return;
+    }
+    update(config.id, { mode: "replay", replayDate: date });
+  };
 
   return (
     <section
@@ -27,6 +38,11 @@ export function ChartPanel({ config }: { config: ChartConfig }) {
       aria-label={`Chart ${config.id}`}
     >
       <div className="flex h-8 shrink-0 items-center gap-1 overflow-x-auto border-b border-line px-2">
+        <div className="flex items-center gap-0.5" role="group" aria-label="Data source">
+          <Button active={config.mode === "live"} onClick={() => update(config.id, { mode: "live" })}>Live</Button>
+          <Button active={config.mode === "replay"} onClick={toReplay}>Replay</Button>
+        </div>
+        <span className="mx-1 h-4 w-px bg-line" aria-hidden />
         <div className="flex items-center gap-0.5" role="group" aria-label="Interval">
           {intervals.map((sec) => (
             <Button key={sec} active={config.interval === sec} onClick={() => update(config.id, { interval: sec })}>
@@ -56,6 +72,7 @@ export function ChartPanel({ config }: { config: ChartConfig }) {
         <Button active={config.showImbalances} onClick={() => update(config.id, { showImbalances: !config.showImbalances })}
                 title="Stacked imbalances (engine rule v1, ratio 3)">Imb</Button>
       </div>
+      {config.mode === "replay" && <ReplayBar config={config} />}
       <div className="min-h-0 flex-1">
         <FootprintChart config={config} units={units} lotSize={lotSize} tickSize={tickSize} onStats={onStats} />
       </div>

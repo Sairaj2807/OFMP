@@ -47,6 +47,9 @@ test("terminal streams live data and draws the footprint", async ({ page }) => {
   const consoleErrors: string[] = [];
   page.on("console", (m) => m.type() === "error" && consoleErrors.push(m.text()));
   await openTerminal(page);
+  // layouts are saved per user on the server: set the state this test relies on
+  await page.getByRole("button", { name: "1 chart" }).click();
+  await page.getByRole("region", { name: "Chart c1" }).getByRole("button", { name: "Live", exact: true }).click();
 
   await expect(page.getByRole("status").filter({ hasText: "Live" })).toBeVisible({ timeout: 10_000 });
   await expect(page.getByLabel("Active contract")).not.toHaveText("—");
@@ -61,6 +64,8 @@ test("terminal streams live data and draws the footprint", async ({ page }) => {
 
 test("layouts, interval changes and the command palette", async ({ page }) => {
   await openTerminal(page);
+  await page.getByRole("button", { name: "1 chart" }).click();
+  await page.getByRole("region", { name: "Chart c1" }).getByRole("button", { name: "Live", exact: true }).click();
   await expect(page.getByText("Waiting for the first trade…")).toBeHidden({ timeout: 15_000 });
 
   await page.getByRole("button", { name: "4 charts" }).click();
@@ -87,4 +92,62 @@ test("layouts, interval changes and the command palette", async ({ page }) => {
   await page.getByRole("button", { name: "2 charts" }).click();
   await page.reload();
   await expect(page.locator('[data-testid^="chart-c"]')).toHaveCount(2);
+});
+
+test("replay a recorded session: play, step and back to live", async ({ page }) => {
+  const res = await page.request.get("/api/v1/market/replay/sessions");
+  const sessions: { date: string }[] = res.ok() ? (await res.json()).data : [];
+  test.skip(sessions.length === 0, "no recorded sessions on this backend");
+
+  await openTerminal(page);
+  await page.getByRole("button", { name: "1 chart" }).click();
+  const chart = page.getByRole("region", { name: "Chart c1" });
+  await chart.getByRole("button", { name: "Replay", exact: true }).click();
+  const bar = chart.getByRole("group", { name: "Replay controls c1" });
+  await expect(bar).toBeVisible();
+  await expect(chart.getByLabel("Replay progress")).toHaveText(/^0 \//);
+
+  await chart.getByRole("button", { name: "Step one trade" }).click();
+  await expect(chart.getByLabel("Replay progress")).not.toHaveText(/^0 \//);
+  await chart.getByLabel("Replay speed").selectOption("50");
+  await chart.getByRole("button", { name: "Play replay" }).click();
+  const before = await chart.getByLabel("Replay clock").textContent();
+  await expect(chart.getByLabel("Replay clock")).not.toHaveText(before ?? "", { timeout: 5_000 });
+  await expect(page.getByText("Waiting for the first trade…")).toBeHidden();
+  await chart.getByRole("button", { name: "Pause replay" }).click();
+  await expect(chart.getByRole("button", { name: "Play replay" })).toBeVisible();
+
+  await chart.getByRole("button", { name: "Live", exact: true }).click();
+  await expect(bar).toBeHidden();
+});
+
+test("workspaces: save as, autosave, persisted on the server, delete", async ({ page }) => {
+  const probe = await page.request.get("/api/v1/workspaces");
+  test.skip(probe.status() === 503, "workspaces need the database");
+  await openTerminal(page);
+  const menuButton = page.getByRole("button", { name: /Workspace/ });
+  await expect(menuButton).toBeVisible();
+  const name = `E2E ${Date.now()}`;
+
+  await menuButton.click();
+  await page.getByRole("menuitem", { name: "Save as…" }).click();
+  await page.getByLabel("Workspace name").fill(name);
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(menuButton).toContainText(name);
+
+  await menuButton.click();
+  await page.getByRole("menuitem", { name: "Make default" }).click();
+  await page.getByRole("button", { name: "4 charts" }).click();
+  await expect(menuButton).toContainText("Saved", { timeout: 5_000 });
+
+  // server-side, not browser storage: clear local storage (layout and last-used) and reload;
+  // the default workspace and its layout come back from the server
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await expect(page.getByRole("button", { name: /Workspace/ })).toContainText(name);
+  await expect(page.locator('[data-testid^="chart-c"]')).toHaveCount(4);
+
+  await page.getByRole("button", { name: /Workspace/ }).click();
+  await page.getByRole("menuitem", { name: "Delete this workspace" }).click();
+  await expect(page.getByRole("button", { name: /Workspace/ })).not.toContainText(name);
 });

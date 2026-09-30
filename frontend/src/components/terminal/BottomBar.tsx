@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { useLiveStats } from "@/hooks/useLiveStream";
+import { useLiveStats, useReplayMeta } from "@/hooks/useLiveStream";
 import { intervalLabel, price, signed } from "@/lib/format";
 import { snapshotBus } from "@/lib/snapshots";
 import { useSession } from "@/stores/session";
@@ -23,6 +23,7 @@ export function BottomBar() {
   const units = useTerminal((s) => s.units);
   const lotSize = useSession((s) => s.feed.lotSize);
   const stats = useLiveStats((s) => (active ? s.stats[active.id] : null));
+  const replay = useReplayMeta((s) => (active && active.mode === "replay" ? s.meta[active.id] : undefined));
   const [ltp, setLtp] = useState<number | null>(null);
   const [sideBasis, setSideBasis] = useState<string | null>(null);
 
@@ -41,7 +42,8 @@ export function BottomBar() {
       <Stat label={`Chart ${active?.id ?? ""} · ${active ? intervalLabel(active.interval) : ""}`} value={price(ltp)} />
       <Stat label={`Bar volume · ${units}`} value={stats ? signed(stats.volume / d).replace("+", "") : "—"} />
       <Stat label={`Bar delta · ${units}`} value={stats ? signed(stats.delta / d) : "—"} tone={tone(stats?.delta)} />
-      <Stat label={`CVD since start · ${units}`} value={stats ? signed(stats.cvd / d) : "—"} tone={tone(stats?.cvd)} />
+      <Stat label={replay ? `CVD · replay ${replay.date} · ${units}` : `CVD since start · ${units}`}
+            value={stats ? signed(stats.cvd / d) : "—"} tone={tone(stats?.cvd)} />
       <div className="ml-auto px-3 text-[11px] text-muted" title="BUY/SELL are inferred per trade by the validated midpoint rule (vtrender_reconstruction v1).">
         Sides: {sideBasis ?? "—"}
       </div>

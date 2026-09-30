@@ -50,6 +50,22 @@ def record_summary(obs: dict) -> dict:
     return {"qty": obs["qty"], "algo_side": obs["algo_side"], "algo_reason": obs.get("algo_reason")}
 
 
+def apply_record(state: ReplayState, obs: dict) -> None:
+    """Advance a replay by one saved record: the same Footprint.add_trade and
+    candle rollover the live engine runs, then the record's depth snapshot.
+    Shared by the one-shot rebuild below and the streaming replay session, so
+    the two cannot drift."""
+    state.trade_count += 1
+    for trade in trades_from_record(obs):
+        candle_ts = state.footprint.add_trade(trade)
+        _advance_candle(state, candle_ts)
+    if obs.get("bid_levels") is not None:
+        state.book.replace_side("BUY", [tuple(lvl) for lvl in obs["bid_levels"]])
+    if obs.get("ask_levels") is not None:
+        state.book.replace_side("SELL", [tuple(lvl) for lvl in obs["ask_levels"]])
+    state.last_observation = obs
+
+
 def build_replay_state(observations: list, tick_size: float,
                         as_of_ms: Optional[int] = None) -> ReplayState:
     """Replays a day's saved records (sorted by ts_ms, as returned by
@@ -58,22 +74,10 @@ def build_replay_state(observations: list, tick_size: float,
     leaves the order book set to the latest record's attached depth
     snapshot."""
     state = ReplayState(tick_size)
-
     for obs in observations:
         if as_of_ms is not None and obs["ts_ms"] > as_of_ms:
             break
-        state.trade_count += 1
-
-        for trade in trades_from_record(obs):
-            candle_ts = state.footprint.add_trade(trade)
-            _advance_candle(state, candle_ts)
-
-        if obs.get("bid_levels") is not None:
-            state.book.replace_side("BUY", [tuple(lvl) for lvl in obs["bid_levels"]])
-        if obs.get("ask_levels") is not None:
-            state.book.replace_side("SELL", [tuple(lvl) for lvl in obs["ask_levels"]])
-        state.last_observation = obs
-
+        apply_record(state, obs)
     return state
 
 

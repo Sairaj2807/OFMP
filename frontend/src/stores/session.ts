@@ -19,11 +19,13 @@ interface SessionState {
   feed: FeedState;
   contracts: Contract[];
   intervals: number[];
+  notice: string | null; // one transient message for the top bar
   setUser: (user: User | null) => void;
   setStream: (status: StreamStatus) => void;
   setFeed: (feed: Partial<FeedState>) => void;
   setContracts: (contracts: Contract[]) => void;
   setIntervals: (intervals: number[]) => void;
+  setNotice: (notice: string | null) => void;
 }
 
 export const useSession = create<SessionState>()((set) => ({
@@ -32,6 +34,7 @@ export const useSession = create<SessionState>()((set) => ({
   feed: { connected: false, error: null, symbol: null, tickSize: 0.1, lotSize: 65 },
   contracts: [],
   intervals: DEFAULT_INTERVALS,
+  notice: null,
   setUser: (user) => set({ user }),
   setStream: (stream) => set({ stream }),
   setFeed: (feed) =>
@@ -42,4 +45,5 @@ export const useSession = create<SessionState>()((set) => ({
     }),
   setContracts: (contracts) => set({ contracts }),
   setIntervals: (intervals) => set({ intervals: intervals.length ? intervals : DEFAULT_INTERVALS }),
+  setNotice: (notice) => set({ notice }),
 }));

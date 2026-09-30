@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 
 import { useLiveStream } from "@/hooks/useLiveStream";
+import { flushSave, useWorkspaces } from "@/hooks/useWorkspaces";
 import { ApiError, api } from "@/lib/api";
 import { intervalLabel } from "@/lib/format";
 import { useSession } from "@/stores/session";
@@ -50,8 +51,10 @@ export function Terminal() {
   }, [router]);
 
   useLiveStream(user !== null);
+  useWorkspaces(user !== null);
 
   const logout = useCallback(async () => {
+    await flushSave().catch(() => undefined);   // keep the last layout change
     await api.logout().catch(() => undefined);
     useSession.getState().setUser(null);
     router.replace("/login/");

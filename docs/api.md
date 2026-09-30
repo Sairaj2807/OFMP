@@ -101,6 +101,39 @@ live contract (`POST /api/contract`) needs `admin.system`.
 | GET | `/api/v1/admin/users` | `admin.users` | cursor-paginated by email |
 | GET | `/api/v1/admin/system` | `admin.system` | feed, database writer, WebSocket stats |
 
+## Workspaces
+
+Saved terminal layouts, per user. Requires `workspace.read` / `workspace.write`.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/workspaces` | your workspaces, default first (no config bodies) |
+| POST | `/api/v1/workspaces` | `{name, config, config_version}` → 201; the first becomes default |
+| GET | `/api/v1/workspaces/{id}` | full config |
+| PATCH | `/api/v1/workspaces/{id}` | `{revision, name?, config?, config_version?, is_default?}` |
+| POST | `/api/v1/workspaces/{id}/duplicate` | `{name}` |
+| DELETE | `/api/v1/workspaces/{id}` | soft delete; the default moves to the most recently used remaining workspace |
+
+**Ownership.** Another user's workspace returns `404 NOT_FOUND`, exactly like a missing one, so IDs
+can't be probed. Ownership fields in request bodies are rejected.
+
+**Concurrency.** Every change must send the `revision` it was based on. A stale write gets
+`409 REVISION_CONFLICT`, not a silent overwrite.
+
+**Limits.**
+- 50 workspaces per user (`409 LIMIT_REACHED`).
+- Config at most 64 KB (`413 CONFIG_TOO_LARGE`).
+- Names are 1–80 characters, unique per user (`409 NAME_TAKEN`).
+
+`config` is the terminal's versioned JSON, and newer frontends migrate older saves field by field. Create
+and delete go to `audit_logs`.
+
+## Replay sessions
+
+`GET /api/v1/market/replay/sessions` (`market.read`) returns `{"data": [{date, trades}]}`: the stored
+sessions available for replay. Trades come from the database when it is configured, otherwise from the
+JSONL session folders.
+
 ## Real-time stream: `/ws/v1/stream`
 
 **Authenticating.** Use the `ofmp_access` cookie. Clients without cookies instead send
@@ -132,3 +165,36 @@ live contract (`POST /api/contract`) needs `admin.system`.
 
 **Backpressure.** A connection holds at most one pending snapshot. If the client falls behind,
 intermediate snapshots are replaced by the newest one, so memory per connection stays constant.
+
+### Replay over the stream
+
+Any chart id can replay a stored session instead of streaming live. The replay runs **on the server**,
+through the same aggregation code as live (`replay_engine.apply_record`), using the sides stored with
+each trade. Nothing is re-classified, and only snapshots are sent.
+
+**Starting a replay:**
+
+```json
+{"action": "replay", "id": "c1", "date": "2026-09-29", "ppr": 1, "interval": 300, "speed": 10, "autoplay": false, "at_ms": null}
+```
+
+- The server replies `replay_started` with the session metadata, then snapshots.
+- Each snapshot's `data.replay` holds `{date, start_ms, end_ms, cursor_ms, index, total, playing, speed, speeds}`.
+- Re-sending `replay` for the same date keeps the position (useful for a row-size or interval change).
+- A `subscribe` on the same id switches it back to live.
+
+**Controls:**
+
+```json
+{"action": "replay_control", "id": "c1", "command": "play|pause|speed|seek|step", "value": 50, "unit": "trade|candle"}
+```
+
+- `speed` accepts 1, 2, 5, 10, 25 or 50.
+- `seek` takes an epoch-ms value.
+- `step` moves one trade, or to the end of the next candle.
+
+**Limits and errors.** At most 2 replays per connection (within the 6-subscription limit). Error codes:
+`REPLAY_UNAVAILABLE`, `INVALID_SPEED`, `INVALID_CONTROL`, `NO_REPLAY`, `TOO_MANY_REPLAYS`.
+
+Loaded days are shared between viewers through a small cache. On the dev machine, a 10,000-trade day
+loads in about 0.5 s.

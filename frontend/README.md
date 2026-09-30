@@ -71,6 +71,24 @@ src/
 e2e/                    Playwright specs
 ```
 
+## Replay and workspaces
+
+**Replay.** Each chart panel has a **Live / Replay** switch. Replay adds a bar with:
+- the session date
+- step one trade / step to the end of the next candle
+- play / pause and speed (1–50×)
+- a seek slider
+- the IST replay clock and trade progress
+
+Playback runs on the server (see `docs/api.md`), and each chart can replay a different day.
+
+**Workspaces.** The top-bar menu lets you switch, save as, rename, duplicate, make default or delete a
+workspace.
+- Layout changes autosave to the current workspace after 1.5 s, and immediately when the page closes.
+- If another window saved first, the newer copy is loaded and a notice explains why.
+- The last-used workspace reopens in the same browser.
+- Without a database, the terminal keeps working on local storage only.
+
 ## Keyboard
 
 | Key | Action |

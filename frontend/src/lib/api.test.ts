@@ -44,6 +44,13 @@ describe("ApiClient", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("does not attempt a refresh without a session (no CSRF cookie)", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(json(401, { error: { code: "UNAUTHENTICATED", message: "x" } }));
+    const api = new ApiClient(fetchImpl, () => "");
+    await expect(api.me()).rejects.toBeInstanceOf(ApiError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("reads cookies by exact name", () => {
     expect(readCookie("ofmp_csrf", "a=1; ofmp_csrf=x%20y; ofmp_csrf2=no")).toBe("x y");
     expect(readCookie("missing", "a=1")).toBe("");

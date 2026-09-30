@@ -867,3 +867,62 @@ violations. The backend suite ran on Python 3.12 inside the image: 272 passed.
 - Pinning GitHub Actions to commit SHAs; image signing.
 - Load testing.
 - Off-site copy automation for backups (the documented `rclone` step).
+
+## 21. Phase 7 status (workspaces + replay)
+
+Done on 2026-09-30.
+
+**Workspaces:**
+- Migration `0003` adds the `workspaces` table. It is organization-scoped, with a soft delete, a unique
+  name per user (among non-deleted workspaces), a revision counter and a default flag.
+- `WorkspaceService` and `/api/v1/workspaces`:
+  - ownership checks that look identical to "not found"
+  - optimistic concurrency (409 on a stale revision)
+  - size and count limits
+  - audit logging
+- Terminal:
+  - loads the last-used workspace, else the default, else creates one
+  - autosaves with the revision after 1.5 s and on `pagehide` (keepalive)
+  - adopts the server copy on a conflict and shows a notice
+  - menu: switch, save as, rename, duplicate, make default, delete
+- Terminal config v1 → v2 is migrated field by field; invalid values are repaired, never discarded.
+
+**Replay:**
+- `ReplaySession` runs server-side on a virtual clock: play, pause, speed 1–50×, seek, step by trade or
+  candle.
+- It shares `replay_engine.apply_record` with the one-shot rebuild, and a parity test proves streamed
+  replay equals the rebuild at every seek target.
+- `ReplayLibrary` caches loaded days (LRU) and reads from the database when configured, else JSONL.
+- The stream protocol gained `replay` and `replay_control`. An id is live or replaying, never both;
+  there are at most 2 replays per connection, each with its own backpressure slot.
+- Terminal: a Live/Replay switch per chart, and a replay bar with session date, stepping, play/pause,
+  speed, a seek slider, the IST clock and progress. It resumes at the last position after a reconnect.
+
+**Measured on real data (the 40,460 imported trades):**
+- A 10,320-trade day loads in 0.51 s.
+- Speeds are exact: 10× gave 30.3 s of market time in 3 s real; 50× gave 152.9 s.
+- Seek and candle-step land exactly.
+
+**CI fixes on `main` during this phase:**
+- `next typegen` runs before `tsc`, because a clean checkout has no generated route types.
+- All actions are pinned to commit SHAs, after trivy-action's unprefixed tag vanished.
+- Actions moved off the deprecated Node 20 versions.
+- Dependabot skips major versions.
+
+**Caught by tests:**
+- `PATCH` required `name` (the shared field definition had no default).
+- An automatic token refresh fired with no session, causing a spurious 403.
+- A layout change could be lost if the page reloaded before the autosave fired.
+- Tests assumed per-user state that is now persisted, so they now set it explicitly.
+
+**Verified:**
+- 295 backend tests with the database
+- 23 frontend unit tests
+- 8 Playwright tests, including replay of a real session and workspace persistence (local storage is
+  cleared before reload, to prove it is server-side)
+
+**Still open:**
+- Alerts (next phase).
+- Replay across contract switches within one day (a session is replayed as a whole).
+- Sharing workspaces within an organization.
+- Workspace history / undo.

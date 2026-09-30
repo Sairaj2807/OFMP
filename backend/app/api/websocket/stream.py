@@ -7,12 +7,19 @@ Protocol (JSON text frames):
     {"action": "subscribe", "id": "c1", "streams": ["chart"], "ppr": 1, "interval": 60, "contract": "NIFTY27OCT26FUT"}
     {"action": "unsubscribe", "id": "c1"}         (no id: drop every subscription)
     {"action": "pong"}  /  {"action": "ping"}
+    {"action": "replay", "id": "c1", "date": "2026-09-29", "ppr": 1, "interval": 60, "speed": 10,
+     "autoplay": true, "at_ms": null}          replay a stored session on this chart id
+    {"action": "replay_control", "id": "c1", "command": "play" | "pause" | "speed" | "seek" | "step",
+     "value": <speed or epoch ms>, "unit": "trade" | "candle"}
 
   One connection carries up to MAX_SUBSCRIPTIONS subscriptions (e.g. one per chart
-  in a multi-chart layout); re-subscribing an existing id replaces its settings.
+  in a multi-chart layout), of which at most MAX_REPLAYS replays; re-subscribing an
+  existing id replaces its settings. An id is either live or replaying, never both.
+  Re-sending "replay" for the same date keeps the playback position (settings change only).
 
   server -> client: {"type": ..., "seq": n, "ts": <server epoch ms>, "id"?: <subscription id>, "data": ...}
-    welcome | subscribed | unsubscribed | snapshot | ping | pong | error
+    welcome | subscribed | replay_started | unsubscribed | snapshot | ping | pong | error
+  Replay snapshots carry data.replay = {date, start_ms, end_ms, cursor_ms, index, total, playing, speed, speeds}.
 
 Guarantees and limits:
   - Origin must match the Host (or be an allowed CORS origin): blocks cross-site WebSocket hijacking.
@@ -45,6 +52,8 @@ log = logging.getLogger(__name__)
 STREAMS = ("chart",)
 MAX_CLIENT_FRAME = 4096
 MAX_SUBSCRIPTIONS = 6
+MAX_REPLAYS = 2
+REPLAY_SPEEDS = (1, 2, 5, 10, 25, 50)
 SUB_ID_PATTERN = r"^[A-Za-z0-9_-]{1,32}$"
 
 CLOSE_UNAUTHENTICATED = 4401
@@ -80,7 +89,26 @@ class PingMsg(_Msg):
     action: Literal["ping", "pong"]
 
 
-ClientMessage = TypeAdapter(Union[AuthMsg, SubscribeMsg, UnsubscribeMsg, PingMsg])
+class ReplayMsg(_Msg):
+    action: Literal["replay"]
+    id: str = Field("default", pattern=SUB_ID_PATTERN)
+    date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    ppr: int = Field(1, ge=1, le=5)
+    interval: int = 60
+    speed: int = 10
+    autoplay: bool = True
+    at_ms: Optional[int] = Field(None, ge=0)
+
+
+class ReplayControlMsg(_Msg):
+    action: Literal["replay_control"]
+    id: str = Field("default", pattern=SUB_ID_PATTERN)
+    command: Literal["play", "pause", "speed", "seek", "step"]
+    value: Optional[int] = Field(None, ge=0)
+    unit: Optional[Literal["trade", "candle"]] = None
+
+
+ClientMessage = TypeAdapter(Union[AuthMsg, SubscribeMsg, UnsubscribeMsg, PingMsg, ReplayMsg, ReplayControlMsg])
 
 
 def _now_ms() -> int:
@@ -90,7 +118,8 @@ def _now_ms() -> int:
 class StreamConnection:
     def __init__(self, ws: WebSocket, user, token: str):
         self.ws, self.user, self.token = ws, user, token
-        self.subscriptions: dict = {}      # id -> (ppr, interval)
+        self.subscriptions: dict = {}      # live: id -> (ppr, interval)
+        self.replays: dict = {}            # replay: id -> {"session": ReplaySession, "ppr": .., "interval": ..}
         self.seq = 0
         self.last_seen = time.monotonic()
         self.snapshots_coalesced = 0
@@ -118,10 +147,15 @@ class StreamConnection:
     def drop(self, sub_id: Optional[str]) -> None:
         if sub_id is None:
             self.subscriptions.clear()
+            self.replays.clear()
             self._pending.clear()
         else:
             self.subscriptions.pop(sub_id, None)
+            self.replays.pop(sub_id, None)
             self._pending.pop(sub_id, None)
+
+    def ids(self) -> set:
+        return set(self.subscriptions) | set(self.replays)
 
     async def sender(self) -> None:
         while True:
@@ -129,7 +163,7 @@ class StreamConnection:
             self._wake.clear()
             pending, self._pending = self._pending, {}
             for sub_id, payload in pending.items():
-                if sub_id in self.subscriptions:       # skip snapshots for a just-dropped subscription
+                if sub_id in self.subscriptions or sub_id in self.replays:   # skip just-dropped ids
                     await self.send("snapshot", payload, sub_id)
 
 
@@ -226,6 +260,10 @@ class StreamHub:
                 await conn.send("unsubscribed", sub_id=msg.id)
             elif isinstance(msg, PingMsg) and msg.action == "ping":
                 await conn.send("pong")
+            elif isinstance(msg, ReplayMsg):
+                await self._start_replay(conn, msg)
+            elif isinstance(msg, ReplayControlMsg):
+                await self._control_replay(conn, msg)
             elif isinstance(msg, AuthMsg):
                 await conn.send("error", {"code": "ALREADY_AUTHENTICATED", "message": "connection is authenticated"})
 
@@ -234,7 +272,7 @@ class StreamHub:
             await conn.send("error", {"code": "INVALID_INTERVAL",
                                       "message": f"interval must be one of {list(self.allowed_intervals)}"}, msg.id)
             return
-        if msg.id not in conn.subscriptions and len(conn.subscriptions) >= MAX_SUBSCRIPTIONS:
+        if msg.id not in conn.ids() and len(conn.ids()) >= MAX_SUBSCRIPTIONS:
             await conn.send("error", {"code": "TOO_MANY_SUBSCRIPTIONS",
                                       "message": f"at most {MAX_SUBSCRIPTIONS} subscriptions per connection"}, msg.id)
             return
@@ -243,22 +281,84 @@ class StreamHub:
             await conn.send("error", {"code": "CONTRACT_NOT_AVAILABLE",
                                       "message": "that contract is not streaming; subscribe to the active contract"}, msg.id)
             return
+        conn.replays.pop(msg.id, None)                  # back to live
         conn.subscriptions[msg.id] = (msg.ppr, msg.interval)
         await conn.send("subscribed", {"streams": msg.streams, "ppr": msg.ppr, "interval": msg.interval,
                                        "contract": active.get("tradingsymbol") if active else None}, msg.id)
         conn.offer_snapshot(msg.id, self.gateway.chart_snapshot(msg.ppr, msg.interval))
+
+    # -- replay ---------------------------------------------------------------------------
+
+    async def _start_replay(self, conn: StreamConnection, msg: ReplayMsg) -> None:
+        err = lambda code, text: conn.send("error", {"code": code, "message": text}, msg.id)  # noqa: E731
+        if msg.interval not in self.allowed_intervals:
+            return await err("INVALID_INTERVAL", f"interval must be one of {list(self.allowed_intervals)}")
+        if msg.speed not in REPLAY_SPEEDS:
+            return await err("INVALID_SPEED", f"speed must be one of {list(REPLAY_SPEEDS)}")
+        existing = conn.replays.get(msg.id)
+        if existing and existing["session"].date == msg.date:   # same day: keep position, new settings
+            existing.update(ppr=msg.ppr, interval=msg.interval)
+            conn.offer_snapshot(msg.id, self.gateway.replay_snapshot(existing["session"], msg.ppr, msg.interval))
+            return
+        if msg.id not in conn.ids() and len(conn.ids()) >= MAX_SUBSCRIPTIONS:
+            return await err("TOO_MANY_SUBSCRIPTIONS", f"at most {MAX_SUBSCRIPTIONS} subscriptions per connection")
+        if msg.id not in conn.replays and len(conn.replays) >= MAX_REPLAYS:
+            return await err("TOO_MANY_REPLAYS", f"at most {MAX_REPLAYS} replays per connection")
+        try:
+            session = await self.gateway.open_replay(msg.date)
+        except Exception as e:
+            return await err("REPLAY_UNAVAILABLE", str(e) or "session could not be loaded")
+        session.set_speed(msg.speed)
+        if msg.at_ms is not None:
+            session.seek(msg.at_ms)
+        if msg.autoplay:
+            session.play()
+        conn.subscriptions.pop(msg.id, None)            # this id now replays
+        conn.replays[msg.id] = {"session": session, "ppr": msg.ppr, "interval": msg.interval}
+        await conn.send("replay_started", session.meta(), msg.id)
+        conn.offer_snapshot(msg.id, self.gateway.replay_snapshot(session, msg.ppr, msg.interval))
+
+    async def _control_replay(self, conn: StreamConnection, msg: ReplayControlMsg) -> None:
+        entry = conn.replays.get(msg.id)
+        if entry is None:
+            await conn.send("error", {"code": "NO_REPLAY", "message": "no replay on this id"}, msg.id)
+            return
+        session = entry["session"]
+        try:
+            if msg.command == "play":
+                session.play()
+            elif msg.command == "pause":
+                session.pause()
+            elif msg.command == "speed":
+                session.set_speed(int(msg.value or 0))
+            elif msg.command == "seek":
+                if msg.value is None:
+                    raise ValueError("seek needs value (epoch ms)")
+                session.seek(msg.value)
+            elif msg.command == "step":
+                session.step(msg.unit or "trade")
+        except ValueError as e:
+            await conn.send("error", {"code": "INVALID_CONTROL", "message": str(e)}, msg.id)
+            return
+        conn.offer_snapshot(msg.id, self.gateway.replay_snapshot(session, entry["ppr"], entry["interval"]))
 
     # -- background loops ------------------------------------------------------------------
 
     def push_once(self) -> None:
         """Build each distinct subscription's snapshot once and offer it to its subscribers."""
         cache = {}
-        metrics.WS_SUBSCRIPTIONS.set(sum(len(c.subscriptions) for c in self.connections))
+        metrics.WS_SUBSCRIPTIONS.set(sum(len(c.ids()) for c in self.connections))
         for conn in list(self.connections):
             for sub_id, settings in list(conn.subscriptions.items()):
                 if settings not in cache:
                     cache[settings] = self.gateway.chart_snapshot(*settings)
                 conn.offer_snapshot(sub_id, cache[settings])
+            for sub_id, entry in list(conn.replays.items()):
+                session = entry["session"]
+                was_playing = session.playing
+                session.advance()
+                if was_playing or session.playing:      # paused replays only change on a control message
+                    conn.offer_snapshot(sub_id, self.gateway.replay_snapshot(session, entry["ppr"], entry["interval"]))
 
     async def heartbeat_once(self) -> None:
         now = time.monotonic()
@@ -289,6 +389,7 @@ class StreamHub:
     def stats(self) -> dict:
         return {"connections": len(self.connections),
                 "subscriptions": sum(len(c.subscriptions) for c in self.connections),
+                "replays": sum(len(c.replays) for c in self.connections),
                 "users": len({c.user.id for c in self.connections}),
                 "snapshots_coalesced": sum(c.snapshots_coalesced for c in self.connections),
                 "rejected": dict(self.rejected)}

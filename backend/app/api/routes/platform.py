@@ -75,6 +75,12 @@ async def market_status(request: Request):
     return {"contract": gw.active_contract(), "feed": gw.feed_status()}
 
 
+@market_router.get("/replay/sessions", dependencies=[Depends(require_permission("market.read"))],
+                   summary="Stored sessions available for replay")
+async def replay_sessions(request: Request):
+    return {"data": await _gateway(request).replay_sessions()}
+
+
 @market_router.get("/contracts", dependencies=[Depends(require_permission("market.read"))],
                    summary="Contracts available to switch to")
 async def market_contracts(request: Request):

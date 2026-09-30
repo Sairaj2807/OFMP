@@ -38,9 +38,14 @@ export interface StreamOptions {
 
 const OPEN = 1;
 
+type Subscription =
+  | ({ kind: "live"; contract?: string } & ChartSettings)
+  | ({ kind: "replay"; date: string; speed: number; autoplay: boolean; cursorMs?: number } & ChartSettings);
+
 export class StreamClient {
   private socket: SocketLike | null = null;
-  private readonly subscriptions = new Map<string, ChartSettings & { contract?: string }>();
+  // per chart id: a live subscription, or a replay of a stored session
+  private readonly subscriptions = new Map<string, Subscription>();
   private attempt = 0;
   private timer: unknown = null;
   private running = false;
@@ -66,8 +71,30 @@ export class StreamClient {
   }
 
   subscribe(id: string, settings: ChartSettings, contract?: string): void {
-    this.subscriptions.set(id, { ...settings, contract });
+    this.subscriptions.set(id, { kind: "live", ...settings, contract });
     this.sendSubscribe(id);
+  }
+
+  /** Replay a stored session on this chart id. Re-sending for the same date keeps the position. */
+  replay(id: string, date: string, settings: ChartSettings, opts: { speed?: number; autoplay?: boolean } = {}): void {
+    const prev = this.subscriptions.get(id);
+    const sameDay = prev?.kind === "replay" && prev.date === date ? prev : undefined;
+    this.subscriptions.set(id, {
+      kind: "replay", ...settings, date,
+      speed: opts.speed ?? sameDay?.speed ?? 10,
+      autoplay: opts.autoplay ?? sameDay?.autoplay ?? false,
+      cursorMs: sameDay?.cursorMs,
+    });
+    this.sendSubscribe(id);
+  }
+
+  replayControl(id: string, command: "play" | "pause" | "speed" | "seek" | "step",
+                arg?: { value?: number; unit?: "trade" | "candle" }): void {
+    const s = this.subscriptions.get(id);
+    if (s?.kind !== "replay") return;
+    if (command === "speed" && arg?.value) s.speed = arg.value;
+    if (command === "play" || command === "pause") s.autoplay = command === "play";
+    this.send({ action: "replay_control", id, command, ...arg });
   }
 
   unsubscribe(id: string): void {
@@ -86,6 +113,14 @@ export class StreamClient {
   private sendSubscribe(id: string): void {
     const s = this.subscriptions.get(id);
     if (!s) return;
+    if (s.kind === "replay") {
+      // after a reconnect this resumes where the viewer was (cursorMs from the last snapshot)
+      const msg: Record<string, unknown> = { action: "replay", id, date: s.date, ppr: s.ppr, interval: s.interval,
+                                            speed: s.speed, autoplay: s.autoplay };
+      if (s.cursorMs !== undefined) msg.at_ms = s.cursorMs;
+      this.send(msg);
+      return;
+    }
     const msg: Record<string, unknown> = { action: "subscribe", id, streams: ["chart"], ppr: s.ppr, interval: s.interval };
     if (s.contract) msg.contract = s.contract;
     this.send(msg);
@@ -121,9 +156,19 @@ export class StreamClient {
       case "ping":
         this.send({ action: "pong" });
         break;
-      case "snapshot":
-        if (msg.id && this.subscriptions.has(msg.id)) this.o.onSnapshot(msg.id, msg.data as ChartSnapshot);
+      case "snapshot": {
+        const sub = msg.id ? this.subscriptions.get(msg.id) : undefined;
+        if (!sub || !msg.id) break;
+        const snap = msg.data as ChartSnapshot;
+        // ignore a stale live snapshot racing a switch to replay, and vice versa
+        if ((sub.kind === "replay") !== Boolean(snap.replay)) break;
+        if (sub.kind === "replay" && snap.replay) {
+          sub.cursorMs = snap.replay.cursor_ms;
+          sub.autoplay = snap.replay.playing;
+        }
+        this.o.onSnapshot(msg.id, snap);
         break;
+      }
       case "error": {
         const d = (msg.data ?? {}) as { code?: string; message?: string };
         this.o.onServerError?.(d.code ?? "ERROR", d.message ?? "", msg.id);
