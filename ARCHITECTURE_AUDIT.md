@@ -797,3 +797,73 @@ trades. It is refused in production.
 - Replay in the new UI (the old `/chart?mode=replay` page still works).
 - Drawing tools, alerts UI, volume/market profile panels, DOM trading ladder.
 - The legacy pages (`/`, `/chart`, `/replay`) remain until the new UI reaches parity.
+
+## 20. Phase 6 status (operations)
+
+Done on 2026-09-30. See `docs/deployment.md`, `docs/monitoring.md`, `docs/disaster-recovery.md` and
+`docs/security.md`.
+
+**Images:**
+- **Backend** (Python 3.12, non-root, runtime + test stages): OS security updates at build time; runs
+  on a read-only root filesystem with all capabilities dropped.
+- **nginx** (1.30): builds the terminal and generates the CSP from the shipped HTML.
+- Both scan clean with Trivy (0 fixable HIGH/CRITICAL).
+
+**Stack.** `docker-compose.prod.yml` runs nginx, api, worker (redis mode), timescaledb, redis,
+prometheus, grafana, a one-shot migrate, and certbot (profile).
+- Networks: `data` is internal-only; only nginx is published; Grafana binds to localhost.
+
+**nginx:**
+- TLS 1.2/1.3, HSTS, HTTP→HTTPS redirect
+- security headers
+- strict CSP built from hashes of the inline scripts (no `'unsafe-inline'`)
+- WebSocket proxying
+- per-IP rate and connection limits
+- `/metrics` blocked from outside
+- immutable caching for hashed assets
+
+**Observability:**
+- Prometheus metrics in the API and worker: ticks, provider latency (labelled as the provider's claim),
+  engine time, classifications per version, stream, database writer, HTTP by route template
+- 8 alert rules, validated with promtool
+- a provisioned Grafana dashboard (14 panels)
+- JSON logs with request IDs end to end (nginx → API)
+
+**CI** (`.github/workflows/ci.yml`):
+- ruff, pytest against TimescaleDB, and the node parity test
+- pip-audit
+- frontend lint, types, Vitest, build, npm audit
+- Playwright end-to-end against a real backend
+- image builds with a Trivy gate
+- a gitleaks history scan
+- Dependabot for pip, npm, actions and docker
+
+**Backups.** `backup-db.sh` / `restore-db.sh` (TimescaleDB-aware, checksummed, refuses to overwrite the
+live database without confirmation). A restore was tested into a scratch database and matched.
+
+**Rehearsal.** The full stack was rehearsed locally on HTTPS (8443) with the synthetic feed. All six
+Playwright tests passed through nginx under the strict CSP, and the legacy pages ran with zero CSP
+violations. The backend suite ran on Python 3.12 inside the image: 272 passed.
+
+**Defects the rehearsal caught and fixed:**
+1. **Missing `greenlet`.** SQLAlchemy async needs `greenlet`, and it was missing from the
+   requirements. It only worked locally by accident.
+2. **API container ran the test suite.** Compose without `target:` builds the last Dockerfile stage
+   (`test`), so the "API" container ran pytest.
+3. **Forwarded headers dropped.** nginx does not inherit `proxy_set_header` into locations that set
+   their own. As a result the API lost the real Host, client IP (rate limits and audit IPs would have
+   been nginx's) and scheme. The Origin check blocked every WebSocket.
+4. **Legacy pages blocked by the CSP.** Windows CRLF checkouts meant the build hashed different bytes
+   than browsers do, since browsers normalize newlines before hashing. The hashing now normalizes, and
+   `.gitattributes` enforces LF.
+5. **Vulnerable base images.** They had fixable CVEs: OpenSSL in the Debian base, and the nginx binary
+   on 1.28 (end-of-life).
+6. **Tests depended on the environment** (`INGEST_MODE`, provider). An autouse fixture now pins them.
+
+**Still open:**
+- Alertmanager delivery channels.
+- An exchange holiday calendar for the market-hours alerts.
+- Redis-backed rate limits before running more than one API process.
+- Pinning GitHub Actions to commit SHAs; image signing.
+- Load testing.
+- Off-site copy automation for backups (the documented `rclone` step).

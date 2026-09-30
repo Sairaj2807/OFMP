@@ -93,8 +93,19 @@ def main() -> None:
     import config
     from backend.app.infrastructure.providers.angelone import AngelOneProvider
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    from prometheus_client import start_http_server
+
+    from backend.app.core.logging import configure_logging
+
+    configure_logging(config.LOG_FORMAT)
+    if config.METRICS_ENABLED:
+        start_http_server(config.METRICS_PORT)   # internal network only
     bus = RedisMarketDataBus(aioredis.from_url(config.REDIS_URL))
+    if config.SYNTHETIC_FEED:              # development feed: published, never recorded
+        from backend.app.infrastructure.providers.synthetic import SyntheticProvider
+        log.warning("SYNTHETIC market data (development only): nothing is recorded")
+        asyncio.run(run_ingest_worker(bus, SyntheticProvider(), None))
+        return
     recorder = RawTickRecorder(config.TICKS_DIR) if config.RECORD_RAW_TICKS else None
     writer = None
     if config.DATABASE_URL:

@@ -37,6 +37,7 @@ from urllib.parse import urlparse
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
+from backend.app.core import metrics
 from backend.app.core.permissions import has_permission
 
 log = logging.getLogger(__name__)
@@ -105,10 +106,12 @@ class StreamConnection:
             self.seq += 1
             msg["seq"], msg["ts"] = self.seq, _now_ms()
             await self.ws.send_text(json.dumps(msg, default=str))
+        metrics.WS_MESSAGES.labels(type_).inc()
 
     def offer_snapshot(self, sub_id: str, payload: dict) -> None:
         if sub_id in self._pending:
             self.snapshots_coalesced += 1
+            metrics.WS_COALESCED.inc()
         self._pending[sub_id] = payload
         self._wake.set()
 
@@ -160,6 +163,7 @@ class StreamHub:
     async def handle(self, ws: WebSocket) -> None:
         if not self._origin_allowed(ws):
             self.rejected["origin"] += 1
+            metrics.WS_REJECTED.labels("origin").inc()
             await ws.close(code=CLOSE_FORBIDDEN)
             return
         await ws.accept()
@@ -174,16 +178,19 @@ class StreamHub:
         user = await self.authenticate(token) if token else None
         if user is None or not has_permission(user.role, "market.read"):
             self.rejected["auth"] += 1
+            metrics.WS_REJECTED.labels("auth").inc()
             await ws.close(code=CLOSE_UNAUTHENTICATED if user is None else CLOSE_FORBIDDEN)
             return
         if (len(self.connections) >= self.max_total
                 or sum(1 for c in self.connections if c.user.id == user.id) >= self.max_per_user):
             self.rejected["limit"] += 1
+            metrics.WS_REJECTED.labels("limit").inc()
             await ws.close(code=CLOSE_LIMIT)
             return
 
         conn = StreamConnection(ws, user, token)
         self.connections.add(conn)
+        metrics.WS_CONNECTIONS.set(len(self.connections))
         sender = asyncio.create_task(conn.sender())
         try:
             await conn.send("welcome", {"user": user.public(), "streams": list(STREAMS),
@@ -193,6 +200,7 @@ class StreamHub:
             pass
         finally:
             self.connections.discard(conn)
+            metrics.WS_CONNECTIONS.set(len(self.connections))
             sender.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await sender
@@ -245,6 +253,7 @@ class StreamHub:
     def push_once(self) -> None:
         """Build each distinct subscription's snapshot once and offer it to its subscribers."""
         cache = {}
+        metrics.WS_SUBSCRIPTIONS.set(sum(len(c.subscriptions) for c in self.connections))
         for conn in list(self.connections):
             for sub_id, settings in list(conn.subscriptions.items()):
                 if settings not in cache:

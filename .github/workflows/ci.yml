@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "24"
+  TEST_DATABASE_URL: postgresql+asyncpg://ofmp:ofmp@localhost:5432/ofmp_test
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      timescaledb:
+        image: timescale/timescaledb:2.17.2-pg16
+        env: { POSTGRES_USER: ofmp, POSTGRES_PASSWORD: ofmp, POSTGRES_DB: ofmp_test }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ofmp -d ofmp_test" --health-interval 5s --health-timeout 3s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip, cache-dependency-path: "requirements*.txt" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}" }
+      - run: pip install -r requirements-dev.txt
+      - name: Lint (ruff)
+        run: ruff check .
+      - name: Tests (incl. database integration and classifier regression)
+        run: python -m pytest -q -p no:warnings
+      - name: Engine vs chart-library parity (node)
+        run: node --test tests/js/adapter.test.mjs
+      - name: Dependency vulnerabilities (pip-audit)
+        run: pip-audit -r requirements.txt
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: frontend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Dependency vulnerabilities (production deps)
+        run: npm audit --omit=dev --audit-level=high
+      - uses: actions/upload-artifact@v4
+        with: { name: frontend-out, path: frontend/out, retention-days: 3 }
+
+  e2e:
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    services:
+      timescaledb:
+        image: timescale/timescaledb:2.17.2-pg16
+        env: { POSTGRES_USER: ofmp, POSTGRES_PASSWORD: ofmp, POSTGRES_DB: ofmp }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ofmp -d ofmp" --health-interval 5s --health-timeout 3s --health-retries 30
+    env:
+      DATABASE_URL: postgresql+asyncpg://ofmp:ofmp@localhost:5432/ofmp
+      JWT_SECRET: ci-only-secret-not-used-anywhere-else-0000000000
+      MARKET_DATA_PROVIDER: synthetic
+      COOKIE_SECURE: "0"
+      ENVIRONMENT: development
+      E2E_PASSWORD: ci e2e password 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip, cache-dependency-path: "requirements*.txt" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - uses: actions/download-artifact@v4
+        with: { name: frontend-out, path: frontend/out }
+      - run: pip install -r requirements.txt
+      - run: python -m backend.app.cli migrate
+      - run: python -m backend.app.cli create-user --email demo@example.com --role admin --password-env E2E_PASSWORD
+      - name: Start backend (synthetic feed, serves the built terminal at /app)
+        run: |
+          nohup python -m uvicorn server:app --host 127.0.0.1 --port 8010 > server.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8010/ready && break; sleep 1; done
+      - working-directory: frontend
+        run: npm ci && npx playwright install --with-deps chromium
+      - working-directory: frontend
+        run: npx playwright test
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with: { name: e2e-failure, path: "frontend/e2e-results\nserver.log", retention-days: 7 }
+
+  images:
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --target runtime -t ofmp-backend:ci .
+      - run: docker build -f deploy/nginx/Dockerfile -t ofmp-nginx:ci .
+      - name: Image vulnerabilities (Trivy, fixable HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@0.28.0
+        with: { image-ref: "ofmp-backend:ci", severity: "HIGH,CRITICAL", ignore-unfixed: true, exit-code: "1" }
+      - uses: aquasecurity/trivy-action@0.28.0
+        with: { image-ref: "ofmp-nginx:ci", severity: "HIGH,CRITICAL", ignore-unfixed: true, exit-code: "1" }
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Secret scan (gitleaks, full history)
+        uses: gitleaks/gitleaks-action@v2
+        env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }

@@ -15,6 +15,7 @@ import random
 import time
 from typing import Awaitable, Callable, Iterable, Optional, Union
 
+from backend.app.core import metrics
 from backend.app.domain.market_data import (DataQualityEvent, InstrumentRef, MarketTick, ProviderHealth,
                                             ProviderState, TickQualityMonitor)
 
@@ -117,6 +118,7 @@ class ProviderRunner:
                 if connected_at is not None:
                     self.backoff.connection_lasted(time.monotonic() - connected_at)
                 self.health.reconnects += 1
+                metrics.PROVIDER_RECONNECTS.labels(self.provider.name).inc()
                 self._set_state(ProviderState.RECONNECTING)
                 delay = self.backoff.next_delay()
                 log.info("%s reconnecting in %.1fs (attempt %d)", self.provider.name, delay, self.backoff.attempt)
@@ -153,10 +155,16 @@ class ProviderRunner:
     async def _handle_tick(self, tick: MarketTick) -> None:
         self.health.ticks_received += 1
         self.health.last_tick_ms = tick.received_ts_ms
+        name = self.provider.name
+        metrics.TICKS_RECEIVED.labels(name).inc()
+        metrics.LAST_TICK_TIME.labels(name).set(tick.received_ts_ms / 1000)
+        if tick.exchange_ts_ms:
+            metrics.TICK_PROVIDER_LATENCY.labels(name).observe(max(0.0, (tick.received_ts_ms - tick.exchange_ts_ms) / 1000))
         if self.health.state == ProviderState.DEGRADED:
             self._set_state(ProviderState.CONNECTED)
         for event in self.quality.observe(tick):
             self.health.quality_events += 1
+            metrics.QUALITY_EVENTS.labels(event.kind, event.severity).inc()
             self.on_quality_event(event)
         try:
             result = self.sink(tick)
@@ -164,6 +172,7 @@ class ProviderRunner:
                 await result
         except Exception:
             self.health.ticks_failed += 1
+            metrics.TICKS_FAILED.labels(self.provider.name).inc()
             log.exception("tick consumer failed on %s tick at %s", tick.token, tick.received_ts_ms)
 
     def _on_message(self, received_ts_ms: int) -> None:
@@ -171,6 +180,7 @@ class ProviderRunner:
 
     def _on_drop(self, reason: str) -> None:
         self.health.ticks_dropped += 1
+        metrics.TICKS_DROPPED.labels(self.provider.name).inc()
         log.debug("%s dropped a packet: %s", self.provider.name, reason)
 
     def check_liveness(self, now_ms: Optional[int] = None, stale_after_ms: int = 60_000) -> None:
@@ -183,6 +193,8 @@ class ProviderRunner:
 
     def _set_state(self, state: ProviderState) -> None:
         self.health.state = state
+        metrics.PROVIDER_CONNECTED.labels(self.provider.name).set(
+            1 if state in (ProviderState.CONNECTED, ProviderState.DEGRADED) else 0)
 
     @staticmethod
     def _log_quality_event(event: DataQualityEvent) -> None:

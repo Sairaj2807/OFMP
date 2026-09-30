@@ -20,6 +20,8 @@ export default defineConfig({
     baseURL: process.env.E2E_BASE_URL ?? "http://127.0.0.1:8010",
     viewport: { width: 1600, height: 900 },
     trace: "retain-on-failure",
+    // for staging stacks with a self-signed certificate (never against production)
+    ignoreHTTPSErrors: process.env.E2E_IGNORE_HTTPS_ERRORS === "1",
   },
   projects: [
     { name: "setup", testMatch: /auth\.setup\.ts/ },

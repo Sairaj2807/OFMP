@@ -24,6 +24,7 @@ from orderbook_engine import (TickProcessorState, group_candle_timestamps, group
                               poc_from_rows, process_tick, stacked_imbalances_from_rows,
                               value_area_from_rows)
 from backend.app.api.app import configure_api, start_api
+from backend.app.core import metrics
 from backend.app.core.logging import configure_logging
 from backend.app.domain.market_data import MarketTick
 from backend.app.infrastructure.providers.synthetic import SYNTHETIC_CONTRACT, SyntheticProvider
@@ -59,7 +60,7 @@ app = FastAPI(
 )
 configure_api(app, environment=config.ENVIRONMENT, cookie_secure=config.COOKIE_SECURE,
               cors_origins=config.CORS_ORIGINS, max_request_bytes=config.MAX_REQUEST_BYTES,
-              legacy_auth_required=config.AUTH_REQUIRED)
+              legacy_auth_required=config.AUTH_REQUIRED, metrics_enabled=config.METRICS_ENABLED)
 
 STATE = {
     "contract": None,
@@ -107,7 +108,12 @@ def _on_tick(tick: MarketTick):
             writer = STATE.get("db_writer")
             if writer is not None:   # same trade_id as the JSONL record, so the two reconcile exactly
                 writer.record_trade({**record, "trade_id": trade_id}, provider=provider, token=token)
-    process_tick(engine, tick_in, observation_sink=sink)
+    stop = metrics.timed(metrics.TICK_PROCESSING)
+    result = process_tick(engine, tick_in, observation_sink=sink)
+    stop()
+    if result.get("new_trade") and engine.last_classification is not None:
+        c = engine.last_classification
+        metrics.TRADES_CLASSIFIED.labels(c.classifier_name, c.classifier_version, c.side).inc()
     engine.last_quote = tick  # keep the latest quote around for header display
 
 
@@ -140,10 +146,10 @@ def _redis_bus():
 
 def LiveFeed(contract: dict, on_tick, on_status):
     """The live feed for config.INGEST_MODE (see backend/app/services/market_data/feeds.py)."""
+    if config.INGEST_MODE == "redis":   # the ingest worker owns the provider (Angel One or synthetic)
+        return RedisFeed(contract, on_tick=on_tick, on_status=on_status, bus=_redis_bus())
     if config.SYNTHETIC_FEED:   # demo data: never archived or persisted
         return EmbeddedFeed(contract, on_tick=on_tick, on_status=on_status, provider=SyntheticProvider())
-    if config.INGEST_MODE == "redis":
-        return RedisFeed(contract, on_tick=on_tick, on_status=on_status, bus=_redis_bus())
     recorder = RawTickRecorder(config.TICKS_DIR) if config.RECORD_RAW_TICKS else None
     writer = STATE.get("db_writer")
     return EmbeddedFeed(contract, on_tick=on_tick, on_status=on_status, recorder=recorder,

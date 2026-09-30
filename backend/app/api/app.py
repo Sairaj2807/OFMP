@@ -9,9 +9,10 @@ import json
 from typing import Optional
 from urllib.parse import quote
 
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, Response, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.app.core import metrics
 from backend.app.core.errors import error_body, install_error_handlers
 from backend.app.core.middleware import BodySizeLimitMiddleware, RequestContextMiddleware
 from backend.app.core.permissions import has_permission
@@ -93,7 +94,7 @@ async def _json(send, status: int, body: dict):
 
 
 def configure_api(app: FastAPI, *, environment: str, cookie_secure: bool, cors_origins: list,
-                  max_request_bytes: int, legacy_auth_required: bool) -> None:
+                  max_request_bytes: int, legacy_auth_required: bool, metrics_enabled: bool = True) -> None:
     # Starlette runs the LAST added middleware first: request context wraps everything.
     app.add_middleware(LegacyAuthGuard, enabled=legacy_auth_required)
     if cors_origins:
@@ -114,6 +115,13 @@ def configure_api(app: FastAPI, *, environment: str, cookie_secure: bool, cors_o
     app.state.db_engine = None
     app.state.market = None
     app.state.stream_hub = None
+
+    if metrics_enabled:
+        # Scraped by Prometheus on the internal network; nginx blocks it from outside.
+        @app.get("/metrics", include_in_schema=False)
+        async def metrics_endpoint():
+            body, content_type = metrics.render()
+            return Response(body, media_type=content_type)
 
     @app.websocket("/ws/v1/stream")
     async def ws_stream(websocket: WebSocket):

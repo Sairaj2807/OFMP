@@ -1,0 +1,21 @@
+[project]
+name = "ofmp"
+version = "0.6.0"
+description = "Order-flow market platform: live NIFTY futures footprint, order book and delta"
+requires-python = ">=3.12"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+extend-exclude = ["openalgo-charts-master", "frontend", "backend/alembic/versions"]
+
+[tool.ruff.lint]
+# Correctness-focused set: syntax/undefined names, unused imports/variables,
+# mutable defaults, dangerous patterns. Style is not enforced on existing code.
+select = ["E9", "F63", "F7", "F82", "F401", "F841", "B006", "B008", "B904", "S102", "S307", "S506"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header", "fastapi.Cookie"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B904"]

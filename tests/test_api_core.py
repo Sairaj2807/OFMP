@@ -1,7 +1,6 @@
 """API layer without a database: security primitives, permissions, rate
 limiting, error envelope, request ids, body limits, health, the legacy auth
 guard, and the /ws/v1/stream gateway (with a fake authenticator)."""
-import asyncio
 import time
 import uuid
 
@@ -336,3 +335,18 @@ def test_server_mounts_v1_api_and_gateway_reads_live_state(monkeypatch):
     assert gw.active_contract()["tradingsymbol"] == "T"
     snap = gw.chart_snapshot(1, 60)
     assert snap["ready"] and snap["chart"]["interval_sec"] == 60
+
+
+# ---- metrics ---------------------------------------------------------------------------------------
+
+def test_metrics_endpoint_exposes_series_with_bounded_route_labels():
+    app, _ = ws_app({"good-token-123": user()})
+    c = TestClient(app)
+    c.get("/live")
+    c.get("/api/v1/auth/sessions/00000000-0000-0000-0000-000000000001")   # templated route, raw id must not leak
+    body = c.get("/metrics").text
+    for name in ("ofmp_http_requests_total", "ofmp_http_request_duration_seconds", "ofmp_ws_connections",
+                 "ofmp_ticks_received_total", "ofmp_trades_classified_total", "ofmp_db_rows_pending"):
+        assert name in body
+    assert 'route="/live"' in body
+    assert "00000000-0000-0000-0000-000000000001" not in body

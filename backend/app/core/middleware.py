@@ -5,6 +5,7 @@ import re
 import time
 import uuid
 
+from . import metrics
 from .errors import error_body
 from .logging import request_id_var, user_id_var
 
@@ -41,6 +42,11 @@ class RequestContextMiddleware:
             await self.app(scope, receive, send_wrapper)
         finally:
             if scope["type"] == "http":
+                elapsed = time.perf_counter() - start
+                route = scope.get("route")
+                template = getattr(route, "path", None) or "unmatched"   # template, not raw path: bounded labels
+                metrics.HTTP_REQUESTS.labels(scope["method"], template, str(status["code"])).inc()
+                metrics.HTTP_LATENCY.labels(scope["method"], template).observe(elapsed)
                 access_log.info("%s %s %s", scope["method"], scope["path"], status["code"], extra={
                     "method": scope["method"], "path": scope["path"], "status": status["code"],
                     "latency_ms": round((time.perf_counter() - start) * 1000, 2)})

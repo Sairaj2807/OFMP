@@ -9,7 +9,7 @@ import json
 import logging
 import struct
 import time
-from typing import Callable, Iterable, Optional
+from typing import Callable, Iterable
 
 import websockets
 

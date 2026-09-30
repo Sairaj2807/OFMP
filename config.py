@@ -71,8 +71,9 @@ INSTRUMENT_EXPIRY_MONTH = os.environ.get("INSTRUMENT_EXPIRY_MONTH") or None
 # Broadcast cadence to browser clients
 BROADCAST_INTERVAL_SEC = 0.5
 
-TOKENS_FILE = "angel_tokens.txt"
-INSTRUMENTS_CACHE_FILE = "instruments_cache.json"
+# Writable runtime files; in containers these point into the data volume.
+TOKENS_FILE = os.environ.get("TOKENS_FILE", "angel_tokens.txt")
+INSTRUMENTS_CACHE_FILE = os.environ.get("INSTRUMENTS_CACHE_FILE", "instruments_cache.json")
 
 # ---------------------------------------------------------------------------
 # Data source
@@ -143,6 +144,10 @@ MAX_REQUEST_BYTES = int(os.environ.get("MAX_REQUEST_BYTES", 1_000_000))
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "http://127.0.0.1:8000")
 if ENVIRONMENT == "production" and SYNTHETIC_FEED:
     raise ValueError("MARKET_DATA_PROVIDER=synthetic is for development only")
+# Prometheus metrics: /metrics on the API (block it at the reverse proxy) and
+# METRICS_PORT on the ingest worker.
+METRICS_ENABLED = os.environ.get("METRICS_ENABLED", "1").lower() not in ("0", "false", "no")
+METRICS_PORT = int(os.environ.get("METRICS_PORT", 9108))
 # Built frontend (cd frontend && npm run build), served at /app when present.
 FRONTEND_DIST = os.environ.get("FRONTEND_DIST", "frontend/out")
 
@@ -157,7 +162,7 @@ FRONTEND_DIST = os.environ.get("FRONTEND_DIST", "frontend/out")
 # the fact: a reviewer picks "which day am I replaying" independently of
 # when the server happened to be running.
 COLLECT_OBSERVATIONS = True
-DATA_DIR = "data"
+DATA_DIR = os.environ.get("DATA_DIR", "data")
 SESSIONS_DIR = f"{DATA_DIR}/sessions"
 TICKS_DIR = f"{DATA_DIR}/ticks"
 VERIFIED_DATASET_CSV = f"{DATA_DIR}/verified_dataset.csv"

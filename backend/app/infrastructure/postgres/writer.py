@@ -17,6 +17,7 @@ from typing import Optional
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from backend.app.core import metrics
 from backend.app.domain.market_data import DataQualityEvent, MarketTick
 
 from .rows import quality_event_row, tick_row, trade_row
@@ -48,6 +49,7 @@ class MarketDataWriter:
         if len(q) >= self.max_pending:
             q.popleft()
             self.dropped[table] += 1
+            metrics.DB_ROWS_DROPPED.labels(table).inc()
         q.append(row)
 
     def record_tick(self, tick: MarketTick) -> None:
@@ -82,6 +84,8 @@ class MarketDataWriter:
                         async with self.engine.begin() as conn:
                             await conn.execute(insert(table).on_conflict_do_nothing(), batch)
                     except Exception as e:
+                        metrics.DB_WRITE_ERRORS.inc()
+                        self._export_pending()
                         if self.last_error is None:
                             log.warning("database write failed, keeping %d %s rows buffered: %r", len(q), name, e)
                         self.last_error = f"{type(e).__name__}: {e}"
@@ -89,9 +93,15 @@ class MarketDataWriter:
                     for _ in batch:
                         q.popleft()
                     self.written[name] += len(batch)
+                    metrics.DB_ROWS_WRITTEN.labels(name).inc(len(batch))
+            self._export_pending()
             if self.last_error is not None:
                 log.info("database writes recovered")
                 self.last_error = None
+
+    def _export_pending(self) -> None:
+        for name, q in self._pending.items():
+            metrics.DB_ROWS_PENDING.labels(name).set(len(q))
 
     def stop(self) -> None:
         self._stopped = True

@@ -1,0 +1,27 @@
+# Keep secrets, data and bulky/unrelated trees out of image build contexts.
+.git
+.github
+.env
+.env.*
+!.env.example
+!.env.production.example
+angel_tokens.txt
+instruments_cache.json
+data/
+*.log
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+openalgo-charts-master/
+deploy/certs/
+backups/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/e2e-results/
+frontend/e2e/.auth/
+frontend/playwright-report/
+**/.DS_Store

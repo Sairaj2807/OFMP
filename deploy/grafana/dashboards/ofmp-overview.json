@@ -1,0 +1,467 @@
+{
+ "uid": "ofmp-overview",
+ "title": "OFMP \u2014 platform overview",
+ "timezone": "browser",
+ "schemaVersion": 39,
+ "refresh": "30s",
+ "time": {
+  "from": "now-6h",
+  "to": "now"
+ },
+ "tags": [
+  "ofmp"
+ ],
+ "panels": [
+  {
+   "type": "stat",
+   "title": "Provider connected",
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 6,
+    "h": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "DOWN",
+         "color": "red"
+        },
+        "1": {
+         "text": "UP",
+         "color": "green"
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "max(ofmp_provider_connected)",
+     "refId": "A"
+    }
+   ],
+   "id": 1
+  },
+  {
+   "type": "stat",
+   "title": "Seconds since last tick",
+   "gridPos": {
+    "x": 6,
+    "y": 0,
+    "w": 6,
+    "h": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "time() - max(ofmp_last_tick_timestamp_seconds)",
+     "refId": "A"
+    }
+   ],
+   "id": 2
+  },
+  {
+   "type": "stat",
+   "title": "WebSocket connections",
+   "gridPos": {
+    "x": 12,
+    "y": 0,
+    "w": 6,
+    "h": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "sum(ofmp_ws_connections)",
+     "refId": "A"
+    }
+   ],
+   "id": 3
+  },
+  {
+   "type": "stat",
+   "title": "DB rows pending",
+   "gridPos": {
+    "x": 18,
+    "y": 0,
+    "w": 6,
+    "h": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "sum(ofmp_db_rows_pending)",
+     "refId": "A"
+    }
+   ],
+   "id": 4
+  },
+  {
+   "type": "timeseries",
+   "title": "Tick rate (per s)",
+   "gridPos": {
+    "x": 0,
+    "y": 4,
+    "w": 12,
+    "h": 8
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "sum(rate(ofmp_ticks_received_total[1m])) by (provider)",
+     "legendFormat": "{{provider}}",
+     "refId": "A"
+    }
+   ],
+   "id": 5
+  },
+  {
+   "type": "timeseries",
+   "title": "Provider -> server latency (provider-reported, not exchange-verified)",
+   "gridPos": {
+    "x": 12,
+    "y": 4,
+    "w": 12,
+    "h": 8
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "histogram_quantile(0.5, sum(rate(ofmp_tick_provider_latency_seconds_bucket[5m])) by (le))",
+     "legendFormat": "p50",
+     "refId": "A"
+    },
+    {
+     "expr": "histogram_quantile(0.99, sum(rate(ofmp_tick_provider_latency_seconds_bucket[5m])) by (le))",
+     "legendFormat": "p99",
+     "refId": "B"
+    }
+   ],
+   "id": 6
+  },
+  {
+   "type": "timeseries",
+   "title": "Engine tick processing",
+   "gridPos": {
+    "x": 0,
+    "y": 12,
+    "w": 12,
+    "h": 8
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "histogram_quantile(0.5, sum(rate(ofmp_tick_processing_seconds_bucket[5m])) by (le))",
+     "legendFormat": "p50",
+     "refId": "A"
+    },
+    {
+     "expr": "histogram_quantile(0.99, sum(rate(ofmp_tick_processing_seconds_bucket[5m])) by (le))",
+     "legendFormat": "p99",
+     "refId": "B"
+    }
+   ],
+   "id": 7
+  },
+  {
+   "type": "timeseries",
+   "title": "Trades classified (per min)",
+   "gridPos": {
+    "x": 12,
+    "y": 12,
+    "w": 12,
+    "h": 8
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "sum(rate(ofmp_trades_classified_total[5m])) by (side, classifier, version) * 60",
+     "legendFormat": "{{side}} \u00b7 {{classifier}}/{{version}}",
+     "refId": "A"
+    }
+   ],
+   "id": 8
+  },
+  {
+   "type": "timeseries",
+   "title": "Failures",
+   "gridPos": {
+    "x": 0,
+    "y": 20,
+    "w": 12,
+    "h": 8
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "sum(increase(ofmp_ticks_failed_total[5m]))",
+     "legendFormat": "tick consumer failures",
+     "refId": "A"
+    },
+    {
+     "expr": "sum(increase(ofmp_ticks_dropped_total[5m]))",
+     "legendFormat": "unparseable packets",
+     "refId": "B"
+    },
+    {
+     "expr": "sum(increase(ofmp_provider_reconnects_total[5m]))",
+     "legendFormat": "provider reconnects",
+     "refId": "C"
+    },
+    {
+     "expr": "sum(increase(ofmp_db_rows_dropped_total[5m]))",
+     "legendFormat": "DB rows dropped",
+     "refId": "D"
+    }
+   ],
+   "id": 9
+  },
+  {
+   "type": "timeseries",
+   "title": "Data-quality events (5m)",
+   "gridPos": {
+    "x": 12,
+    "y": 20,
+    "w": 12,
+    "h": 8
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "sum(increase(ofmp_data_quality_events_total[5m])) by (kind)",
+     "legendFormat": "{{kind}}",
+     "refId": "A"
+    }
+   ],
+   "id": 10
+  },
+  {
+   "type": "timeseries",
+   "title": "Streaming",
+   "gridPos": {
+    "x": 0,
+    "y": 28,
+    "w": 12,
+    "h": 8
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "sum(ofmp_ws_connections)",
+     "legendFormat": "connections",
+     "refId": "A"
+    },
+    {
+     "expr": "sum(ofmp_ws_subscriptions)",
+     "legendFormat": "subscriptions",
+     "refId": "B"
+    },
+    {
+     "expr": "sum(rate(ofmp_ws_messages_sent_total[1m]))",
+     "legendFormat": "messages/s",
+     "refId": "C"
+    },
+    {
+     "expr": "sum(rate(ofmp_ws_snapshots_coalesced_total[1m]))",
+     "legendFormat": "coalesced/s (slow clients)",
+     "refId": "D"
+    }
+   ],
+   "id": 11
+  },
+  {
+   "type": "timeseries",
+   "title": "Database writer",
+   "gridPos": {
+    "x": 12,
+    "y": 28,
+    "w": 12,
+    "h": 8
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "sum(rate(ofmp_db_rows_written_total[1m])) by (table)",
+     "legendFormat": "written/s {{table}}",
+     "refId": "A"
+    },
+    {
+     "expr": "sum(ofmp_db_rows_pending) by (table)",
+     "legendFormat": "pending {{table}}",
+     "refId": "B"
+    }
+   ],
+   "id": 12
+  },
+  {
+   "type": "timeseries",
+   "title": "HTTP requests by status (per s)",
+   "gridPos": {
+    "x": 0,
+    "y": 36,
+    "w": 12,
+    "h": 8
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "sum(rate(ofmp_http_requests_total[1m])) by (status)",
+     "legendFormat": "{{status}}",
+     "refId": "A"
+    }
+   ],
+   "id": 13
+  },
+  {
+   "type": "timeseries",
+   "title": "HTTP p95 latency by route",
+   "gridPos": {
+    "x": 12,
+    "y": 36,
+    "w": 12,
+    "h": 8
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "histogram_quantile(0.95, sum(rate(ofmp_http_request_duration_seconds_bucket[5m])) by (le, route))",
+     "legendFormat": "{{route}}",
+     "refId": "A"
+    }
+   ],
+   "id": 14
+  }
+ ]
+}

@@ -1,0 +1,51 @@
+# Alert rules. Delivery (Alertmanager: email/Telegram/webhook) is configured per deployment.
+groups:
+  - name: ofmp
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations: { summary: "{{ $labels.job }} is not being scraped" }
+
+      - alert: ProviderDisconnected
+        # The feed is legitimately quiet outside NSE hours (09:15-15:30 IST, Mon-Fri); this
+        # rule only fires inside them. Holidays still need the exchange calendar (future).
+        expr: max(ofmp_provider_connected) == 0 and on() (hour() >= 3 and hour() < 10) and on() (day_of_week() >= 1 and day_of_week() <= 5)
+        for: 2m
+        labels: { severity: critical }
+        annotations: { summary: "Market-data provider disconnected during market hours" }
+
+      - alert: NoTicksDuringMarketHours
+        expr: (time() - max(ofmp_last_tick_timestamp_seconds)) > 120 and on() (hour() >= 4 and hour() < 10) and on() (day_of_week() >= 1 and day_of_week() <= 5)
+        for: 1m
+        labels: { severity: critical }
+        annotations: { summary: "No market data for over 2 minutes during market hours" }
+
+      - alert: TickConsumerFailures
+        expr: increase(ofmp_ticks_failed_total[5m]) > 0
+        labels: { severity: warning }
+        annotations: { summary: "Ticks are failing in the engine or publisher" }
+
+      - alert: DatabaseWriterBacklog
+        expr: max(ofmp_db_rows_pending) > 50000
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "Database writer is falling behind ({{ $value }} rows pending)" }
+
+      - alert: DatabaseRowsDropped
+        expr: increase(ofmp_db_rows_dropped_total[10m]) > 0
+        labels: { severity: critical }
+        annotations: { summary: "Database writer buffer overflowed; rows were dropped" }
+
+      - alert: HighApiErrorRate
+        expr: sum(rate(ofmp_http_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(ofmp_http_requests_total[5m])), 0.001) > 0.05
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "More than 5% of API requests are failing" }
+
+      - alert: SlowTickProcessing
+        expr: histogram_quantile(0.99, sum(rate(ofmp_tick_processing_seconds_bucket[5m])) by (le)) > 0.01
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "p99 tick processing above 10 ms" }

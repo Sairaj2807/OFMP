@@ -30,3 +30,7 @@ openalgo-charts-master/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Deployment secrets and generated files
+deploy/certs/
+backups/
