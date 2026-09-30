@@ -1,0 +1,216 @@
+"""server.py's contract switcher: _activate_contract, _on_tick's per-record
+symbol tagging, and the /api/contracts + /api/contract endpoints. A fake ws
+client stands in for AngelWebSocketClient so nothing here
+touches the network."""
+import asyncio
+
+import pytest
+
+import server
+
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+class FakeWsClient:
+    """Mirrors AngelWebSocketClient's shape (run()/stop()) but
+    never opens a real connection -- run() just blocks until cancelled, the
+    same way the real clients block inside their own reconnect loop."""
+    instances = []
+
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+        self.stopped = False
+        self.started = False
+        FakeWsClient.instances.append(self)
+
+    def stop(self):
+        self.stopped = True
+
+    async def run(self):
+        self.started = True
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            raise
+
+
+@pytest.fixture(autouse=True)
+def fake_clients(monkeypatch):
+    FakeWsClient.instances = []
+    monkeypatch.setattr(server, "AngelWebSocketClient", FakeWsClient)
+    yield
+    # tear down any task _activate_contract left running so tests don't leak
+    task = getattr(server.app.state, "ws_task", None)
+    if task and not task.done():
+        task.cancel()
+
+
+def contract(symbol="NIFTY24SEP26FUT", token="111", tick_size=0.1, lotsize=65):
+    return {"token": token, "tradingsymbol": symbol, "tick_size": tick_size,
+            "lotsize": lotsize, "exch_seg": "NFO"}
+
+
+# ---- _activate_contract ---------------------------------------------------------
+
+def test_activate_contract_sets_state_and_starts_the_client():
+    run(server._activate_contract(contract("NIFTY24SEP26FUT")))
+    assert server.STATE["contract"]["tradingsymbol"] == "NIFTY24SEP26FUT"
+    assert server.STATE["engine"] is not None and server.STATE["engine"].tick_count == 0
+    assert server.STATE["connected"] is False and server.STATE["last_error"] is None
+    assert len(FakeWsClient.instances) == 1 and FakeWsClient.instances[0].started
+
+
+def test_activate_contract_replaces_the_engine_and_stops_the_old_client():
+    run(server._activate_contract(contract("NIFTY24SEP26FUT")))
+    old_engine, old_client = server.STATE["engine"], server.STATE["ws_client"]
+    old_engine.tick_count = 42   # prove it's really a DIFFERENT object afterward, not reused
+
+    run(server._activate_contract(contract("NIFTY29OCT26FUT", token="222")))
+    assert server.STATE["contract"]["tradingsymbol"] == "NIFTY29OCT26FUT"
+    assert server.STATE["engine"] is not old_engine
+    assert server.STATE["engine"].tick_count == 0          # a fresh footprint/CVD, not carried over
+    assert old_client.stopped is True
+    assert len(FakeWsClient.instances) == 2
+
+
+def test_activate_contract_cancels_the_old_ws_task():
+    """Both switches run inside ONE asyncio.run() call, and every check on
+    task liveness happens before that call returns: asyncio.run() cancels
+    any still-pending task as part of its own shutdown, so checking a task's
+    .done() state from OUTSIDE the run() that created it can't tell a task
+    the code genuinely left running apart from one asyncio.run() swept up on
+    exit -- both would read back as "done" by then, for unrelated reasons."""
+    async def both():
+        await server._activate_contract(contract())
+        old_task = server.app.state.ws_task
+        await server._activate_contract(contract("NIFTY29OCT26FUT", token="222"))
+        new_task = server.app.state.ws_task
+        await asyncio.sleep(0)   # let the new task actually start running
+        return old_task.done(), new_task is old_task, new_task.done(), FakeWsClient.instances[-1].started
+    old_done, replaced, new_done, new_started = run(both())
+    assert old_done is True
+    assert replaced is False
+    assert new_done is False
+    assert new_started is True
+
+
+def test_two_switches_fired_concurrently_leave_self_consistent_state():
+    """Regression guard, not a proof CONTRACT_SWITCH_LOCK is load-bearing:
+    checked by mutation (temporarily removing the lock) and this specific
+    scenario still passed, because _activate_contract's STATE-mutating block
+    has no `await` inside it -- Python's cooperative scheduling can only
+    interleave two coroutines AT an await point, so "last writer wins"
+    cleanly either way here. The lock stays in as a real safeguard should
+    that ever change (e.g. an async step added to client teardown, or a
+    real client whose constructor/stop() does I/O, unlike FakeWsClient's
+    synchronous stop()) -- this test only pins down that the END state is
+    self-consistent, which holds regardless of whether the lock fires."""
+    async def both():
+        await asyncio.gather(
+            server._activate_contract(contract("A", token="1", tick_size=0.1)),
+            server._activate_contract(contract("B", token="2", tick_size=0.05)),
+        )
+    run(both())
+    running = [c for c in FakeWsClient.instances if not c.stopped]
+    assert len(running) == 1                                   # exactly one client left live
+    # never mismatched: engine's footprint always keyed to whichever contract STATE settled on
+    assert server.STATE["engine"].footprint.tick_size == server.STATE["contract"]["tick_size"]
+
+
+# ---- _on_tick symbol tagging ------------------------------------------------------
+
+class FakeStore:
+    def __init__(self):
+        self.logged = []
+
+    def log(self, obs):
+        self.logged.append(obs)
+        return len(self.logged)
+
+
+def make_tick(ltp=100.0, ltt=1_700_000_000_000, cum_volume=65):
+    return {"ltp": ltp, "ltt": ltt, "cum_volume": cum_volume,
+            "depth_buy": [(99.9, 65, 1)], "depth_sell": [(100.1, 65, 1)]}
+
+
+def test_on_tick_tags_the_active_symbol():
+    run(server._activate_contract(contract("NIFTY24SEP26FUT")))
+    store = FakeStore()
+    server.STATE["observation_store"] = store
+    server._on_tick(make_tick(cum_volume=0))    # primes the counter, no trade yet
+    server._on_tick(make_tick(cum_volume=65))   # now a trade
+    assert store.logged and store.logged[-1]["symbol"] == "NIFTY24SEP26FUT"
+
+
+def test_on_tick_tags_correctly_across_a_mid_stream_switch():
+    """Two trades either side of a live switch must each carry the symbol
+    that was ACTUALLY active when they were logged, not the final one."""
+    run(server._activate_contract(contract("NIFTY24SEP26FUT")))
+    store = FakeStore()
+    server.STATE["observation_store"] = store
+    server._on_tick(make_tick(cum_volume=0))
+    server._on_tick(make_tick(cum_volume=65))            # trade under September
+
+    run(server._activate_contract(contract("NIFTY29OCT26FUT", token="222")))
+    server._on_tick(make_tick(cum_volume=0))
+    server._on_tick(make_tick(cum_volume=65))            # trade under October
+
+    symbols = [o["symbol"] for o in store.logged]
+    assert symbols == ["NIFTY24SEP26FUT", "NIFTY29OCT26FUT"]
+
+
+def test_on_tick_without_a_store_configured_does_not_crash():
+    run(server._activate_contract(contract()))
+    server.STATE["observation_store"] = None
+    server._on_tick(make_tick(cum_volume=0))
+    server._on_tick(make_tick(cum_volume=65))   # must not raise
+
+
+# ---- /api/contracts and /api/contract ----------------------------------------------
+
+def fake_angel_rows():
+    return [
+        {"token": "1", "tradingsymbol": "NIFTY24SEP26FUT", "name": "NIFTY", "expiry": "24SEP2026",
+         "tick_size": 0.1, "lotsize": 65, "exch_seg": "NFO"},
+        {"token": "2", "tradingsymbol": "NIFTY29OCT26FUT", "name": "NIFTY", "expiry": "29OCT2026",
+         "tick_size": 0.1, "lotsize": 65, "exch_seg": "NFO"},
+    ]
+
+
+def test_api_contracts_angel_flags_the_active_one(monkeypatch):
+    import angel_client
+    monkeypatch.setattr(angel_client, "list_configured_futures", lambda **k: fake_angel_rows())
+    run(server._activate_contract(contract("NIFTY29OCT26FUT", token="2")))
+
+    result = run(server.api_contracts())
+    assert result["data_source"] == "angel"
+    assert [c["active"] for c in result["contracts"]] == [False, True]
+
+
+def test_api_switch_contract_angel_valid_token(monkeypatch):
+    import angel_client
+    monkeypatch.setattr(angel_client, "list_configured_futures", lambda **k: fake_angel_rows())
+    run(server._activate_contract(contract("NIFTY24SEP26FUT", token="1")))
+
+    result = run(server.api_switch_contract(server.ContractSwitchRequest(token="2")))
+    assert result["ok"] is True
+    assert result["contract"]["tradingsymbol"] == "NIFTY29OCT26FUT"
+    assert server.STATE["contract"]["tradingsymbol"] == "NIFTY29OCT26FUT"
+
+
+def test_api_switch_contract_angel_unknown_token_leaves_state_untouched(monkeypatch):
+    import angel_client
+    monkeypatch.setattr(angel_client, "list_configured_futures", lambda **k: fake_angel_rows())
+    run(server._activate_contract(contract("NIFTY24SEP26FUT", token="1")))
+
+    result = run(server.api_switch_contract(server.ContractSwitchRequest(token="999")))
+    assert result["ok"] is False and "999" in result["error"]
+    assert server.STATE["contract"]["tradingsymbol"] == "NIFTY24SEP26FUT"   # unchanged
+
+
+def test_api_switch_contract_angel_missing_token_is_rejected():
+    result = run(server.api_switch_contract(server.ContractSwitchRequest()))
+    assert result["ok"] is False and "token" in result["error"]

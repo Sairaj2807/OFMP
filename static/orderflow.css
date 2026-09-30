@@ -1,0 +1,85 @@
+/* Order-flow chart page. Builds on style.css (top bar, nav, order-book table);
+   only what is specific to the chart layout lives here. Theme colours arrive as
+   the same CSS variables style.css defines, overridden from orderflow.js. */
+
+body.of-page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+.readouts { display: flex; gap: 22px; font-variant-numeric: tabular-nums; }
+.readout { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+.readout label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .4px; }
+.readout b { font-size: 15px; font-weight: 600; }
+.readout b.up { color: var(--green-bright); }
+.readout b.down { color: var(--red-bright); }
+
+.of-toolbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px;
+  padding: 8px 18px; background: var(--panel); border-bottom: 1px solid var(--border);
+}
+.of-toolbar .spacer, .of-footer .spacer { flex: 1; }
+.control { display: flex; align-items: center; gap: 6px; color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: .4px; }
+.check { display: flex; align-items: center; gap: 5px; color: var(--text-dim); font-size: 12px; cursor: pointer; }
+.of-toolbar select, .of-toolbar button, .of-replay select, .of-replay input[type="text"], .of-replay button {
+  background: var(--panel-alt); color: var(--text); border: 1px solid var(--border);
+  border-radius: 4px; padding: 4px 8px; font-size: 12px; font-family: inherit; cursor: pointer;
+}
+.of-toolbar select:hover, .of-toolbar button:hover, .of-replay button:hover:not(:disabled) { border-color: var(--blue); }
+.of-replay button:disabled { opacity: .4; cursor: not-allowed; }
+.of-replay input[type="text"] { cursor: text; }
+.of-replay input[type="text"].invalid { border-color: var(--red-bright); }
+input[type="checkbox"], input[type="range"] { accent-color: var(--green-bright); }
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+.badge-source {
+  font-size: 11px; padding: 3px 8px; border-radius: 10px; color: var(--text-dim);
+  border: 1px solid var(--border); background: var(--panel-alt); white-space: nowrap;
+}
+
+#table-options { position: relative; }
+#table-options summary { color: var(--text-dim); cursor: pointer; font-size: 12px; }
+#table-options fieldset {
+  position: fixed; z-index: 40; width: 230px; margin: 0; padding: 12px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--panel);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .35);
+}
+#table-options legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+#table-options fieldset .check { padding: 4px 0; color: var(--text); }
+#table-options .note { color: var(--text-dim); font-size: 11px; margin: 8px 0; }
+#table-close { width: 100%; }
+
+.of-replay { padding: 8px 18px; background: var(--panel); border-bottom: 1px solid var(--border); }
+.of-replay[hidden] { display: none; }
+.of-replay .replay-row { margin-bottom: 4px; }
+.of-replay #rp-slider { margin: 4px 0; }
+.of-replay .replay-time-row { margin-bottom: 0; }
+#rp-trade-card { font-variant-numeric: tabular-nums; }
+
+.of-main { flex: 1; min-height: 0; display: flex; gap: 10px; padding: 10px; }
+#chart-wrap { position: relative; flex: 1; min-width: 0; min-height: 320px; }
+#chart { position: absolute; inset: 0; background: var(--bg); border-radius: 6px; overflow: hidden; }
+.of-book { width: 330px; flex: none; overflow-y: auto; align-self: flex-start; max-height: 100%; }
+@media (max-width: 1000px) { .of-main { flex-direction: column; } .of-book { width: auto; align-self: stretch; } #chart-wrap { min-height: 55vh; } }
+
+.of-empty {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--text-dim); font-size: 14px; pointer-events: none;
+}
+.of-empty[hidden] { display: none; }
+
+#tip {
+  position: absolute; z-index: 30; pointer-events: none; min-width: 190px; padding: 9px 11px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--panel);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .35); font-variant-numeric: tabular-nums; font-size: 12px;
+}
+#tip[hidden] { display: none; }
+#tip .title { color: var(--text-dim); margin-bottom: 5px; }
+#tip .row { display: flex; justify-content: space-between; gap: 18px; }
+#tip .row span { color: var(--text-dim); }
+
+.of-footer {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 7px 18px;
+  color: var(--text-dim); font-size: 11px; border-top: 1px solid var(--border); background: var(--panel);
+}
+.key { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { width: 9px; height: 9px; border-radius: 1px; background: var(--green-bright); display: inline-block; }
+.swatch.sell { background: var(--red-bright); }
+.swatch.poc { background: transparent; border: 1px solid var(--text-dim); width: 14px; }

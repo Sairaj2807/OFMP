@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NIFTY FUT — Orderflow Replay</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header id="topbar">
+    <div class="symbol-block">
+      <span>Orderflow Replay</span>
+      <span id="status-dot" class="dot disconnected"></span>
+      <span id="status-text">loading…</span>
+    </div>
+    <nav class="view-nav">
+      <a href="/">Live</a>
+      <a href="/replay" class="active">Orderflow Replay</a>
+      <a href="/chart?mode=replay">Footprint Chart</a>
+    </nav>
+    <div class="unit-toggle" role="group" aria-label="Quantity units">
+      <button id="unit-qty" class="unit-btn active" type="button">Qty</button>
+      <button id="unit-lots" class="unit-btn" type="button">Lots</button>
+    </div>
+  </header>
+
+  <section id="replay-controls" class="panel">
+    <p class="replay-help">
+      Verify this saved session's trade classification against Vtrender's own <strong>Orderflow Replay</strong>
+      for the same date and instrument. Step or scrub to a trade below, advance Vtrender's replay to the same
+      timestamp, and confirm agreement — no need to watch both live at once. Use
+      <code>review_cli.py --date &lt;date&gt;</code> to record verified labels.
+    </p>
+    <div class="replay-row">
+      <label for="session-select">Session</label>
+      <select id="session-select"><option value="">— no sessions yet —</option></select>
+      <span id="session-meta" class="dim"></span>
+    </div>
+    <div class="replay-row">
+      <button id="rp-prev" type="button" disabled>⏮ Prev Trade</button>
+      <button id="rp-play" type="button" disabled>▶ Play</button>
+      <button id="rp-next" type="button" disabled>Next Trade ⏭</button>
+      <select id="rp-speed">
+        <option value="1">1×</option>
+        <option value="2">2×</option>
+        <option value="5" selected>5×</option>
+        <option value="10">10×</option>
+        <option value="30">30×</option>
+        <option value="60">60×</option>
+      </select>
+      <label for="rp-goto">Jump to</label>
+      <input id="rp-goto" type="text" placeholder="HH:MM:SS" size="10" />
+      <button id="rp-goto-btn" type="button">Go</button>
+      <div class="row-controls-right">
+        <div class="ppr-select-wrap">
+          <label for="interval-select">Interval</label>
+          <select id="interval-select">
+            <option value="60">1m</option>
+            <option value="180">3m</option>
+            <option value="300">5m</option>
+            <option value="900">15m</option>
+            <option value="1800">30m</option>
+          </select>
+        </div>
+        <div class="ppr-select-wrap">
+          <label for="ppr-select">Price/Row</label>
+          <select id="ppr-select">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <input id="rp-slider" type="range" min="0" max="1000" value="0" step="1" disabled />
+    <div class="replay-time-row">
+      <span id="rp-cursor-time">—</span>
+      <span id="rp-gap-hint" class="dim"></span>
+    </div>
+    <div id="rp-trade-card" class="trade-card">No trade at cursor yet.</div>
+  </section>
+
+  <main>
+    <section id="orderbook-panel" class="panel">
+      <h2>Order Book <span class="dim">(as of latest trade ≤ cursor — not tick-continuous, see docstring in replay_engine.py)</span></h2>
+      <div class="ob-stats">
+        <div><label>Spread</label><span id="ob-spread">—</span></div>
+        <div><label>Mid</label><span id="ob-mid">—</span></div>
+        <div><label>Micro</label><span id="ob-micro">—</span></div>
+        <div class="obi-wrap">
+          <label>OBI</label>
+          <div class="obi-bar"><div id="obi-fill" class="obi-fill"></div></div>
+          <span id="ob-obi">0.00</span>
+        </div>
+      </div>
+      <table id="ob-table">
+        <thead>
+          <tr><th>Orders</th><th>Qty</th><th>Price</th><th>Price</th><th>Qty</th><th>Orders</th></tr>
+        </thead>
+        <tbody id="ob-asks-body"></tbody>
+        <tbody id="ob-bids-body"></tbody>
+      </table>
+    </section>
+
+    <section id="orderflow-panel" class="panel">
+      <div class="panel-head">
+        <h2>Order Flow — Footprint (replayed)</h2>
+      </div>
+      <div class="of-stats">
+        <div><label>Session CVD</label><span id="of-cvd">0</span></div>
+        <div><label>Candle Δ</label><span id="of-delta">0</span></div>
+        <div id="of-imbalances" class="badges"></div>
+      </div>
+      <canvas id="cvd-canvas" width="900" height="70"></canvas>
+      <div id="footprint-scroll">
+        <table id="fp-table"></table>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/render.js"></script>
+  <script src="/static/replay.js"></script>
+</body>
+</html>
