@@ -1,6 +1,6 @@
-"""Regression guard for the validated trade classifier (see
-VTRENDERS_RECONSTRUCTED_ALGORITHM.md). Any change to TradeClassifier.classify
-that alters a single verified trade's output fails here.
+"""Regression guard for the validated trade classifier,
+VtrenderReconstructedClassifierV1 (see VTRENDERS_RECONSTRUCTED_ALGORITHM.md).
+Any change that alters a single verified trade's output fails here.
 
 Baseline, measured 2026-09-30: 54/55 against the hand-verified labels; the
 only miss is trade 25, the zero-tick case the classifier's docstring
@@ -15,7 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from orderbook_engine import TradeClassifier
+from backend.app.domain.orderflow import (ClassificationContext, VtrenderReconstructedClassifierV1,
+                                          get_classifier)
 
 FIXTURE = Path(__file__).resolve().parent.parent / "fixtures" / "verified_trades" / "verified_dataset.csv"
 
@@ -35,12 +36,11 @@ def _rows():
 
 
 def _classify(row):
-    c = TradeClassifier()
-    c.last_price = _num(row["prev_ltp"])
-    c.last_side = row["prev_side"] or None
-    side = c.classify(float(row["ltp"]), _num(row["best_bid"]), _num(row["best_ask"]),
-                      _num(row["quote_age_ms"]))
-    return side, c.last_reason
+    c = VtrenderReconstructedClassifierV1().classify(ClassificationContext(
+        price=float(row["ltp"]), best_bid=_num(row["best_bid"]), best_ask=_num(row["best_ask"]),
+        prev_price=_num(row["prev_ltp"]), prev_side=row["prev_side"] or None,
+        quote_age_ms=_num(row["quote_age_ms"])))
+    return c.side, c.method
 
 
 ROWS = _rows()
@@ -60,6 +60,13 @@ def test_each_verified_trade_keeps_its_pinned_side_and_reason(row):
         assert reason == "Tick Rule (stale-quote fallback)"
     else:
         assert reason == "Midpoint Rule (VTRenders)"
+
+
+def test_v1_is_the_registered_default_and_identifies_itself():
+    default = get_classifier()
+    assert isinstance(default, VtrenderReconstructedClassifierV1)
+    c = default.classify(ClassificationContext(price=100.0, best_bid=99.9, best_ask=100.3))
+    assert (c.classifier_name, c.classifier_version) == ("vtrender_reconstruction", "v1")
 
 
 def test_accuracy_against_verified_labels_is_54_of_55_missing_only_trade_25():

@@ -1,5 +1,7 @@
 # Order-flow chart (`/chart`)
 
+> **Status (2026-09-30):** Arrow support has been removed; the platform runs on Angel One only. Arrow-specific parts below (exact-side `btv`/`atv` records, `arrow_trades.jsonl`, `contract_resolver.py`, `ARROW_*` settings) are historical. The engine now lives in `backend/app/domain/orderflow/` — see [docs/orderflow-engine.md](docs/orderflow-engine.md).
+
 A footprint chart drawn by OpenAlgo Charts' `Footprint` primitive from the engine's
 data ([orderbook_engine.py](orderbook_engine.py)). Live at `/chart`, saved sessions at
 `/chart?mode=replay`. The engine stays the source of truth for trades, sides, delta and

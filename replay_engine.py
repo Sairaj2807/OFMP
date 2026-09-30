@@ -4,15 +4,13 @@ REPLAY_WORKFLOW.md) — lets a reviewer scrub a saved session to any
 timestamp and see the same footprint chart the live dashboard renders,
 side by side with Vtrender's own Orderflow Replay for that date.
 
-Two saved schemas are understood (see trades_from_record):
-  - Angel observations (`qty` + `algo_side`): one classified trade per record.
-  - Arrow exact-side records (`buy_qty` / `sell_qty`): up to two trades per
-    record (BUY then SELL), exactly as orderbook_engine._process_exact_sides
-    emitted them live.
+Each saved observation (`qty` + `algo_side`) is one classified trade.
+Replay never re-classifies: it uses the side stored with each record, so a
+past session always replays with the classifier version that produced it.
 
 Reconstruction is exact for the footprint: it's built purely from the
 already-classified trades replayed through the same Footprint.add_trade and
-the same candle-rollover step (orderbook_engine._advance_candle) the live
+the same candle-rollover step (pipeline.advance_candle) the live
 engine uses, so delta/POC/value-area/imbalances/CVD all match what the live
 engine would have shown at that instant.
 
@@ -42,35 +40,14 @@ class ReplayState:
         self.last_observation: Optional[dict] = None
 
 
-def _is_exact_record(obs: dict) -> bool:
-    return "buy_qty" in obs or "sell_qty" in obs
-
-
 def trades_from_record(obs: dict) -> list:
-    """The Trade objects one saved record stands for, in the order the live
-    engine added them. Exact-side (Arrow) records can carry both sides."""
-    if _is_exact_record(obs):
-        coalesced = bool(obs.get("coalesced"))
-        return [
-            Trade(timestamp=obs["ts_ms"], price=obs["ltp"], quantity=qty, side=side, coalesced=coalesced)
-            for qty, side in ((obs.get("buy_qty") or 0, "BUY"), (obs.get("sell_qty") or 0, "SELL"))
-            if qty > 0
-        ]
+    """The Trade objects one saved record stands for (always one)."""
     return [Trade(timestamp=obs["ts_ms"], price=obs["ltp"], quantity=obs["qty"], side=obs["algo_side"])]
 
 
 def record_summary(obs: dict) -> dict:
-    """qty / side / reason for a saved record, whichever schema it is in.
-    Angel records return exactly their stored fields; exact-side records
-    synthesize them (side is "BUY+SELL" when a coalesced update carried both)
-    and add the raw buy_qty/sell_qty."""
-    if not _is_exact_record(obs):
-        return {"qty": obs["qty"], "algo_side": obs["algo_side"], "algo_reason": obs.get("algo_reason")}
-    buy, sell = obs.get("buy_qty") or 0, obs.get("sell_qty") or 0
-    side = "BUY+SELL" if buy and sell else ("BUY" if buy else "SELL")
-    reason = "Feed btv/atv (exact side)" + (", coalesced" if obs.get("coalesced") else "")
-    return {"qty": buy + sell, "algo_side": side, "algo_reason": reason,
-            "buy_qty": buy, "sell_qty": sell, "coalesced": bool(obs.get("coalesced"))}
+    """qty / side / reason stored with a saved record."""
+    return {"qty": obs["qty"], "algo_side": obs["algo_side"], "algo_reason": obs.get("algo_reason")}
 
 
 def build_replay_state(observations: list, tick_size: float,

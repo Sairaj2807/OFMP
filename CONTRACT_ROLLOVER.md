@@ -1,5 +1,7 @@
 # Contract auto-roll and manual switching
 
+> **Status (2026-09-30):** Arrow support has been removed; the platform runs on Angel One only. Arrow-specific parts below (exact-side `btv`/`atv` records, `arrow_trades.jsonl`, `contract_resolver.py`, `ARROW_*` settings) are historical. The engine now lives in `backend/app/domain/orderflow/` — see [docs/orderflow-engine.md](docs/orderflow-engine.md).
+
 Fixes the recurring "no NIFTY FUTIDX contract found expiring in SEP" crash: the server used
 to require an exact expiry-month match (`config.INSTRUMENT_EXPIRY_MONTH`), which goes stale the
 moment that month's contract rolls off the scrip master. Now it always resolves "whichever

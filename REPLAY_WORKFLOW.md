@@ -1,5 +1,7 @@
 # Verifying against Vtrender's Orderflow Replay
 
+> **Status (2026-09-30):** Arrow support has been removed; the platform runs on Angel One only. Arrow-specific parts below (exact-side `btv`/`atv` records, `arrow_trades.jsonl`, `contract_resolver.py`, `ARROW_*` settings) are historical. The engine now lives in `backend/app/domain/orderflow/` — see [docs/orderflow-engine.md](docs/orderflow-engine.md).
+
 Companion to [TRADE_CLASSIFICATION.md](TRADE_CLASSIFICATION.md), which documents the classification
 algorithm itself. This document covers *how the algorithm's output gets checked against Vtrender* —
 specifically, using Vtrender's **Orderflow Replay** feature instead of watching Vtrender live.

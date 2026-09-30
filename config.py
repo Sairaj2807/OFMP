@@ -8,15 +8,17 @@ from dotenv import load_dotenv
 # variables take precedence over .env.
 load_dotenv()
 
+from backend.app.domain.orderflow import settings as _orderflow  # noqa: E402
+
 # Footprint aggregation
-CANDLE_INTERVAL_SEC = 60          # native 1-minute footprint candles — the ONLY
+CANDLE_INTERVAL_SEC = _orderflow.NATIVE_CANDLE_SEC  # native 1-minute footprint candles — the ONLY
                                    # interval the engine ever buckets trades into,
                                    # live or in replay. Coarser display intervals
                                    # (see ALLOWED_CHART_INTERVALS_SEC) are built by
                                    # grouping native candles at payload time
                                    # (orderbook_engine.group_native_bars), not by
                                    # running extra aggregation in the hot tick path.
-MAX_CANDLES_KEPT = 400            # rolling window of NATIVE candles retained (live
+MAX_CANDLES_KEPT = _orderflow.MAX_CANDLES_KEPT  # rolling window of NATIVE candles retained (live
                                    # pruning and replay's own rollover both use this).
                                    # ~ a full NSE session (375 one-minute candles),
                                    # so a 30-minute chart view still has a useful
@@ -31,14 +33,14 @@ MAX_CANDLES_KEPT = 400            # rolling window of NATIVE candles retained (l
 ALLOWED_CHART_INTERVALS_SEC = (60, 180, 300, 900, 1800)   # 1, 3, 5, 15, 30 min
 
 # Value Area
-VALUE_AREA_PCT = 0.70
+VALUE_AREA_PCT = _orderflow.VALUE_AREA_PCT
 
 # Stacked imbalance detection
-IMBALANCE_THRESHOLD = 3.0
-MIN_STACK = 3
+IMBALANCE_THRESHOLD = _orderflow.IMBALANCE_THRESHOLD
+MIN_STACK = _orderflow.MIN_STACK
 
 # Order book
-DEPTH_LEVELS = 5                  # Angel One Snap Quote gives best-5 only
+DEPTH_LEVELS = _orderflow.DEPTH_LEVELS  # Angel One Snap Quote gives best-5 only
 
 # VTRenders trade classification (see VTRENDERS_RECONSTRUCTED_ALGORITHM.md).
 # Primary rule (midpoint, opposite polarity of classic Lee-Ready) is
@@ -46,7 +48,7 @@ DEPTH_LEVELS = 5                  # Angel One Snap Quote gives best-5 only
 # rests on a single observed example (trade_id 17, 14000ms) — treat as a
 # placeholder, not a calibrated parameter, until more stale-quote examples
 # are collected.
-VTRENDERS_STALE_QUOTE_MS = 14000
+VTRENDERS_STALE_QUOTE_MS = _orderflow.VTRENDER_STALE_QUOTE_MS
 
 # WebSocket
 WS_URL = "wss://smartapisocket.angelone.in/smart-stream"

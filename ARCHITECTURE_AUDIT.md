@@ -564,10 +564,32 @@ Done on 2026-09-30:
 - Chart and adapter tests moved from the Arrow file to the synthetic Angel session.
 - Git repository initialised; baseline committed.
 
-Carried into Phase 1:
+## 15. Phase 1 status
 
-- Remove the now-unused exact-side (`btv/atv`) path from `orderbook_engine.py` and `replay_engine.py`.
-- Remove the stale Arrow references in `ORDERFLOW_CHART.md` and `CONTRACT_ROLLOVER.md`.
+Done on 2026-09-30, on branch `phase1-domain-core`:
+
+- Engine moved to `backend/app/domain/orderflow/` (pure Python, isolation enforced by a test).
+  `orderbook_engine.py` is now a compatibility layer. See `docs/orderflow-engine.md`.
+- The classifier sits behind a versioned `TradeClassifier` protocol, with a registry:
+  - `vtrender_reconstruction/v1` is the default and is the unchanged production rule;
+  - `lee_ready/v1` and `tick_rule/v1` are registered for comparison.
+- Every observation record now stores `classifier_name` and `classifier_version`.
+- `process_tick` is split into explicit stages. The research feature snapshot moved to
+  `research/observation_features.py`, and the engine emits a `TradeEvent` instead.
+- The unused exact-side (`btv/atv`) path and `coalesced` bookkeeping were removed from the engine and
+  from replay.
+- Engine parameters have a single source (`settings.py`), re-exported by `config.py`.
+- Added an engine-wide golden test pinned to the pre-refactor engine. The refactored engine reproduces
+  it byte-for-byte.
+- **Found:** v1 decides trades exactly at the midpoint by floating-point rounding.
+  - Affects 1.04% of live trades; 11 of 40,210 went BUY because of it.
+  - Kept as-is and pinned by a test. A fix is a v2 candidate (see `docs/orderflow-engine.md`).
+
+Still open:
+
+- Move `review_cli.py`, `export_dataset.py`, `lee_ready_classifier.py` and `emo_classifier.py` into
+  `research/`. They are unchanged so far, to keep their documented command lines working.
+- Arrow-era docs carry a status note rather than a rewrite.
 
 ---
 

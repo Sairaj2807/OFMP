@@ -1,5 +1,7 @@
 # Trade Classification Algorithm — Mathematical Documentation
 
+> **Status (2026-09-30):** this documents the ORIGINAL Lee-Ready classifier, which scored 13/55 on the verified set. Production uses `VtrenderReconstructedClassifierV1` ([VTRENDERS_RECONSTRUCTED_ALGORITHM.md](VTRENDERS_RECONSTRUCTED_ALGORITHM.md)). Lee-Ready remains available as `LeeReadyClassifier` for comparison. Line references to `orderbook_engine.py` below are historical; see [docs/orderflow-engine.md](docs/orderflow-engine.md).
+
 Source: [orderbook_engine.py](orderbook_engine.py) — classes `TradeClassifier` (L112–150) and `process_tick` (L314–357).
 
 ## 1. The core problem
