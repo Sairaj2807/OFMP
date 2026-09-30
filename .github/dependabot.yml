@@ -1,13 +1,21 @@
 version: 2
+# Minor/patch updates arrive weekly as PRs (CI must pass before merging).
+# Major versions are upgraded deliberately, not by bot: they are ignored here.
 updates:
   - package-ecosystem: pip
     directory: /
     schedule: { interval: weekly }
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
     directory: /frontend
     schedule: { interval: weekly }
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       next-react: { patterns: ["next", "react", "react-dom", "eslint-config-next", "@types/react*"] }
   - package-ecosystem: github-actions
@@ -16,6 +24,9 @@ updates:
   - package-ecosystem: docker
     directory: /
     schedule: { interval: weekly }
+    ignore:
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   - package-ecosystem: docker
     directory: /deploy/nginx
     schedule: { interval: weekly }
