@@ -2,7 +2,7 @@
 # Python >= 3.12 (developed on 3.14.6).
 fastapi==0.141.1
 pydantic==2.13.4
-uvicorn==0.52.1
+uvicorn==0.54.0
 websockets==17.0.1
 sortedcontainers==2.4.0
 pyotp==2.9.0
