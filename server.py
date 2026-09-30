@@ -26,6 +26,7 @@ from orderbook_engine import (TickProcessorState, group_candle_timestamps, group
 from backend.app.api.app import configure_api, start_api
 from backend.app.core.logging import configure_logging
 from backend.app.domain.market_data import MarketTick
+from backend.app.infrastructure.providers.synthetic import SYNTHETIC_CONTRACT, SyntheticProvider
 from backend.app.domain.orderflow import Trade, restore_trades
 from backend.app.infrastructure.postgres.database import create_engine as create_db_engine
 from backend.app.infrastructure.postgres.repositories import load_session_tape, upsert_instrument
@@ -119,6 +120,8 @@ async def _resolve_default_contract() -> dict:
     """The contract to use at startup, or as the fallback if an /api/contract
     switch is requested with no explicit target (not currently exposed, but
     keeps auto-roll and manual switching sharing one resolution path)."""
+    if config.SYNTHETIC_FEED:
+        return dict(SYNTHETIC_CONTRACT)
     return await _resolve_angel_contract()
 
 
@@ -137,6 +140,8 @@ def _redis_bus():
 
 def LiveFeed(contract: dict, on_tick, on_status):
     """The live feed for config.INGEST_MODE (see backend/app/services/market_data/feeds.py)."""
+    if config.SYNTHETIC_FEED:   # demo data: never archived or persisted
+        return EmbeddedFeed(contract, on_tick=on_tick, on_status=on_status, provider=SyntheticProvider())
     if config.INGEST_MODE == "redis":
         return RedisFeed(contract, on_tick=on_tick, on_status=on_status, bus=_redis_bus())
     recorder = RawTickRecorder(config.TICKS_DIR) if config.RECORD_RAW_TICKS else None
@@ -164,7 +169,7 @@ async def _restore_session(engine: TickProcessorState, contract: dict) -> int:
     from stored trades (see orderflow.restore_trades). Best effort: a
     database problem is logged and the engine simply starts empty."""
     db = STATE.get("db_engine")
-    if db is None:
+    if db is None or config.SYNTHETIC_FEED:
         return 0
     try:
         await upsert_instrument(db, contract, instrument_type=config.INSTRUMENT_TYPE)
@@ -216,7 +221,9 @@ async def startup():
         app.state.db_writer_task = asyncio.create_task(STATE["db_writer"].run())
         print("[server] Persisting raw ticks, trades and data-quality events to the database")
 
-    if config.COLLECT_OBSERVATIONS:
+    if config.SYNTHETIC_FEED:
+        print("[server] SYNTHETIC market data (development only): nothing is recorded")
+    elif config.COLLECT_OBSERVATIONS:
         STATE["observation_store"] = ObservationStore()
         print(f"[server] Logging trade observations to {config.SESSIONS_DIR}/<date>/observations.jsonl "
               f"(review live or later via review_cli.py, or visually via /replay)")
@@ -783,6 +790,8 @@ def _current_contract_key() -> tuple:
 
 
 async def _list_candidate_contracts() -> list:
+    if config.SYNTHETIC_FEED:
+        return [dict(SYNTHETIC_CONTRACT)]
     rows = await asyncio.to_thread(angel_client.list_configured_futures)
     return rows[:ANGEL_CANDIDATE_MONTHS]
 
@@ -827,6 +836,9 @@ async def index():
 
 
 app.mount("/static", NoCacheStaticFiles(directory="static"), name="static")
+if os.path.isdir(config.FRONTEND_DIST):
+    # The terminal (Next.js static export, basePath /app): same origin as the API and stream.
+    app.mount("/app", StaticFiles(directory=config.FRONTEND_DIST, html=True), name="frontend")
 
 
 if __name__ == "__main__":

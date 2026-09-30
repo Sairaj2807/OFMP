@@ -94,6 +94,14 @@ if INGEST_MODE not in ("embedded", "redis"):
 # not the default 6379, which other local projects may be using.
 REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:56379/0")
 
+# "angelone" (default) or "synthetic": a random-walk demo feed for development
+# without a broker, credentials or market hours. Synthetic data is never
+# recorded (no observations, tick archive or database trades).
+MARKET_DATA_PROVIDER = os.environ.get("MARKET_DATA_PROVIDER", "angelone")
+if MARKET_DATA_PROVIDER not in ("angelone", "synthetic"):
+    raise ValueError(f"MARKET_DATA_PROVIDER must be 'angelone' or 'synthetic', got {MARKET_DATA_PROVIDER!r}")
+SYNTHETIC_FEED = MARKET_DATA_PROVIDER == "synthetic"
+
 # PostgreSQL + TimescaleDB (docker-compose.dev.yml runs one on port 55432).
 # Unset = persistence off: the platform runs exactly as before on JSONL only.
 # Example: postgresql+asyncpg://ofmp:<password>@127.0.0.1:55432/ofmp
@@ -133,6 +141,10 @@ CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",")
 MAX_REQUEST_BYTES = int(os.environ.get("MAX_REQUEST_BYTES", 1_000_000))
 # Public base URL, used in email links (verification, password reset).
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "http://127.0.0.1:8000")
+if ENVIRONMENT == "production" and SYNTHETIC_FEED:
+    raise ValueError("MARKET_DATA_PROVIDER=synthetic is for development only")
+# Built frontend (cd frontend && npm run build), served at /app when present.
+FRONTEND_DIST = os.environ.get("FRONTEND_DIST", "frontend/out")
 
 # Evidence-collection pipeline for reverse-engineering Vtrender's trade
 # classification (see TRADE_CLASSIFICATION.md). Logs one observation per

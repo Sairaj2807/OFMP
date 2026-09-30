@@ -379,3 +379,49 @@ def test_redis_feed_reports_missing_worker():
         await asyncio.wait_for(task, 1)
         return statuses
     assert run(go())[0] == {"connected": False, "error": "ingest worker not running"}
+
+
+# ---- synthetic provider (development feed) ------------------------------------------------------
+
+def test_synthetic_provider_ticks_are_valid_and_drive_the_engine():
+    from backend.app.domain.orderflow import TickProcessorState, process_tick
+    from backend.app.infrastructure.providers.synthetic import SyntheticProvider
+    p = SyntheticProvider(seed=3)
+    state, trades = TickProcessorState(0.1), []
+    quality = TickQualityMonitor()
+    for i in range(500):
+        t = p.next_tick("SYNTH1", 1_790_653_500_000 + i * 250)
+        assert t.bids[0].price < t.asks[0].price and len(t.bids) == len(t.asks) == 5
+        assert [e.kind for e in quality.observe(t)] in ([], ["timestamp_reversal"])   # never crossed or reset
+        r = process_tick(state, t.to_engine_tick())
+        if r.get("new_trade"):
+            trades.append(r)
+    assert len(trades) > 200 and state.footprint.data
+
+
+def test_live_feed_uses_synthetic_provider_and_records_nothing(monkeypatch):
+    import config
+    import server
+    from backend.app.infrastructure.providers.synthetic import SYNTHETIC_CONTRACT, SyntheticProvider
+    monkeypatch.setattr(config, "SYNTHETIC_FEED", True)
+    monkeypatch.setitem(server.STATE, "db_writer", object())       # must not be wired in synthetic mode
+    feed = server.LiveFeed(dict(SYNTHETIC_CONTRACT), on_tick=lambda t: None, on_status=lambda **kw: None)
+    assert isinstance(feed.runner.provider, SyntheticProvider)
+    assert feed.recorder is None and feed.tick_store is None
+    assert run(server._resolve_default_contract())["tradingsymbol"] == "NIFTYSYNTHFUT"
+    assert run(server._restore_session(None, dict(SYNTHETIC_CONTRACT))) == 0
+
+
+def test_terminal_is_served_at_app_when_built():
+    import os
+
+    import config
+    if not os.path.isdir(config.FRONTEND_DIST):
+        pytest.skip("frontend not built (cd frontend && npm run build)")
+    from fastapi.testclient import TestClient
+
+    import server
+    c = TestClient(server.app)
+    for path in ("/app/", "/app/login/"):
+        r = c.get(path)
+        assert r.status_code == 200 and "<html" in r.text.lower()

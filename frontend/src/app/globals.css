@@ -1,0 +1,89 @@
+@import "tailwindcss";
+
+/* Terminal design tokens. Dark by default; information-dense, low glare.
+   Buy/sell are never distinguished by colour alone: every figure also carries a
+   sign, a side label or its position (sell left, buy right). */
+:root {
+  --bg: #0c0e12;
+  --panel: #12151b;
+  --panel-2: #171b22;
+  --raised: #1d222b;
+  --border: #252b35;
+  --border-strong: #333b48;
+  --text: #dfe4ec;
+  --text-2: #a3acba;
+  --muted: #6f7888;
+  --accent: #4c8dff;
+  --buy: #1fb58f;
+  --buy-bg: rgba(31, 181, 143, 0.14);
+  --sell: #e5485d;
+  --sell-bg: rgba(229, 72, 93, 0.14);
+  --warn: #e0a43a;
+  --focus: #7aa7ff;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-panel-2: var(--panel-2);
+  --color-raised: var(--raised);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-fg: var(--text);
+  --color-fg-2: var(--text-2);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-buy: var(--buy);
+  --color-buy-bg: var(--buy-bg);
+  --color-sell: var(--sell);
+  --color-sell-bg: var(--sell-bg);
+  --color-warn: var(--warn);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono", Consolas, monospace;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+::selection {
+  background: rgba(76, 141, 255, 0.35);
+}
+
+/* resizable panel separators */
+[data-separator] {
+  background: var(--border);
+  transition: background 120ms;
+}
+[data-separator]:hover,
+[data-separator][data-separator-state="drag"] {
+  background: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

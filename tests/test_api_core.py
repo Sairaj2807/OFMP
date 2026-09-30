@@ -253,11 +253,42 @@ def test_ws_connection_limit_per_user():
         assert e.value.code == 4429
 
 
-def test_ws_backpressure_keeps_only_the_latest_snapshot():
+def test_ws_backpressure_keeps_only_the_latest_snapshot_per_subscription():
     conn = StreamConnection(ws=None, user=user(), token="t")
     for n in range(5):
-        conn.offer_snapshot({"n": n})
-    assert conn._pending == {"n": 4} and conn.snapshots_coalesced == 4
+        conn.offer_snapshot("a", {"n": n})
+    conn.offer_snapshot("b", {"n": 9})
+    assert conn._pending == {"a": {"n": 4}, "b": {"n": 9}} and conn.snapshots_coalesced == 4
+
+
+def test_ws_multiple_subscriptions_on_one_connection():
+    app, _ = ws_app({"good-token-123": user()})
+    c = TestClient(app)
+    c.cookies.set("ofmp_access", "good-token-123")
+    with c.websocket_connect("/ws/v1/stream") as ws:
+        ws.receive_json()
+        for sid, interval in (("c1", 60), ("c2", 300)):
+            ws.send_json({"action": "subscribe", "id": sid, "streams": ["chart"], "interval": interval})
+        got = {}
+        while len(got) < 2:
+            m = ws.receive_json()
+            if m["type"] == "snapshot":
+                got[m["id"]] = m["data"]["interval"]
+        assert got == {"c1": 60, "c2": 300}
+        ws.send_json({"action": "unsubscribe", "id": "c1"})
+        while (m := ws.receive_json())["type"] != "unsubscribed":
+            pass
+        assert m["id"] == "c1"
+        ws.send_json({"action": "subscribe", "id": "bad id!", "streams": ["chart"]})
+        assert ws.receive_json()["data"]["code"] == "INVALID_MESSAGE"
+        for i in range(6):
+            ws.send_json({"action": "subscribe", "id": f"x{i}", "streams": ["chart"], "interval": 60})
+        codes = []
+        while len(codes) < 1:
+            m = ws.receive_json()
+            if m["type"] == "error":
+                codes.append(m["data"]["code"])
+        assert codes == ["TOO_MANY_SUBSCRIPTIONS"]
 
 
 def test_ws_heartbeat_closes_revoked_sessions():

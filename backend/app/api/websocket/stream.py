@@ -4,12 +4,15 @@ Protocol (JSON text frames):
 
   client -> server
     {"action": "auth", "token": "<access token>"}      only if no ofmp_access cookie; first message, within 5 s
-    {"action": "subscribe", "streams": ["chart"], "ppr": 1, "interval": 60, "contract": "NIFTY27OCT26FUT"}
-    {"action": "unsubscribe"}
+    {"action": "subscribe", "id": "c1", "streams": ["chart"], "ppr": 1, "interval": 60, "contract": "NIFTY27OCT26FUT"}
+    {"action": "unsubscribe", "id": "c1"}         (no id: drop every subscription)
     {"action": "pong"}  /  {"action": "ping"}
 
-  server -> client: {"type": ..., "seq": n, "ts": <server epoch ms>, "data": ...}
-    welcome | subscribed | snapshot | ping | pong | error
+  One connection carries up to MAX_SUBSCRIPTIONS subscriptions (e.g. one per chart
+  in a multi-chart layout); re-subscribing an existing id replaces its settings.
+
+  server -> client: {"type": ..., "seq": n, "ts": <server epoch ms>, "id"?: <subscription id>, "data": ...}
+    welcome | subscribed | unsubscribed | snapshot | ping | pong | error
 
 Guarantees and limits:
   - Origin must match the Host (or be an allowed CORS origin): blocks cross-site WebSocket hijacking.
@@ -18,9 +21,9 @@ Guarantees and limits:
   - Per-user and global connection limits (4429). Client frames over 4 KB close the socket (1009).
   - seq increases by one per message on a connection; a gap means nothing (messages are never
     skipped mid-send), a coalesced snapshot is simply the newer state.
-  - Backpressure: each connection holds at most ONE pending snapshot. If the client reads slower
+  - Backpressure: each subscription holds at most ONE pending snapshot. If the client reads slower
     than snapshots are produced, older pending snapshots are replaced by newer ones (counted in
-    `snapshots_coalesced`); memory per connection stays constant.
+    `snapshots_coalesced`); memory per connection stays bounded.
   - Idle connections (nothing received for idle_timeout_sec, pongs included) are closed (4408).
 """
 import asyncio
@@ -40,6 +43,8 @@ log = logging.getLogger(__name__)
 
 STREAMS = ("chart",)
 MAX_CLIENT_FRAME = 4096
+MAX_SUBSCRIPTIONS = 6
+SUB_ID_PATTERN = r"^[A-Za-z0-9_-]{1,32}$"
 
 CLOSE_UNAUTHENTICATED = 4401
 CLOSE_FORBIDDEN = 4403
@@ -58,6 +63,7 @@ class AuthMsg(_Msg):
 
 class SubscribeMsg(_Msg):
     action: Literal["subscribe"]
+    id: str = Field("default", pattern=SUB_ID_PATTERN)
     streams: list[Literal["chart"]] = Field(min_length=1, max_length=len(STREAMS))
     ppr: int = Field(1, ge=1, le=5)
     interval: int = 60
@@ -66,6 +72,7 @@ class SubscribeMsg(_Msg):
 
 class UnsubscribeMsg(_Msg):
     action: Literal["unsubscribe"]
+    id: Optional[str] = Field(None, pattern=SUB_ID_PATTERN)
 
 
 class PingMsg(_Msg):
@@ -82,33 +89,45 @@ def _now_ms() -> int:
 class StreamConnection:
     def __init__(self, ws: WebSocket, user, token: str):
         self.ws, self.user, self.token = ws, user, token
-        self.subscription: Optional[tuple] = None      # (ppr, interval)
+        self.subscriptions: dict = {}      # id -> (ppr, interval)
         self.seq = 0
         self.last_seen = time.monotonic()
         self.snapshots_coalesced = 0
-        self._pending = None
+        self._pending: dict = {}           # id -> latest unsent snapshot
         self._wake = asyncio.Event()
         self._send_lock = asyncio.Lock()
 
-    async def send(self, type_: str, data=None) -> None:
+    async def send(self, type_: str, data=None, sub_id: Optional[str] = None) -> None:
+        msg = {"type": type_, "seq": 0, "ts": 0, "data": data}
+        if sub_id is not None:
+            msg["id"] = sub_id
         async with self._send_lock:
             self.seq += 1
-            await self.ws.send_text(json.dumps({"type": type_, "seq": self.seq, "ts": _now_ms(), "data": data},
-                                               default=str))
+            msg["seq"], msg["ts"] = self.seq, _now_ms()
+            await self.ws.send_text(json.dumps(msg, default=str))
 
-    def offer_snapshot(self, text_payload: dict) -> None:
-        if self._pending is not None:
+    def offer_snapshot(self, sub_id: str, payload: dict) -> None:
+        if sub_id in self._pending:
             self.snapshots_coalesced += 1
-        self._pending = text_payload
+        self._pending[sub_id] = payload
         self._wake.set()
+
+    def drop(self, sub_id: Optional[str]) -> None:
+        if sub_id is None:
+            self.subscriptions.clear()
+            self._pending.clear()
+        else:
+            self.subscriptions.pop(sub_id, None)
+            self._pending.pop(sub_id, None)
 
     async def sender(self) -> None:
         while True:
             await self._wake.wait()
             self._wake.clear()
-            payload, self._pending = self._pending, None
-            if payload is not None:
-                await self.send("snapshot", payload)
+            pending, self._pending = self._pending, {}
+            for sub_id, payload in pending.items():
+                if sub_id in self.subscriptions:       # skip snapshots for a just-dropped subscription
+                    await self.send("snapshot", payload, sub_id)
 
 
 class StreamHub:
@@ -195,8 +214,8 @@ class StreamHub:
             if isinstance(msg, SubscribeMsg):
                 await self._subscribe(conn, msg)
             elif isinstance(msg, UnsubscribeMsg):
-                conn.subscription = None
-                await conn.send("unsubscribed")
+                conn.drop(msg.id)
+                await conn.send("unsubscribed", sub_id=msg.id)
             elif isinstance(msg, PingMsg) and msg.action == "ping":
                 await conn.send("pong")
             elif isinstance(msg, AuthMsg):
@@ -204,17 +223,22 @@ class StreamHub:
 
     async def _subscribe(self, conn: StreamConnection, msg: SubscribeMsg) -> None:
         if msg.interval not in self.allowed_intervals:
-            await conn.send("error", {"code": "INVALID_INTERVAL", "message": f"interval must be one of {list(self.allowed_intervals)}"})
+            await conn.send("error", {"code": "INVALID_INTERVAL",
+                                      "message": f"interval must be one of {list(self.allowed_intervals)}"}, msg.id)
+            return
+        if msg.id not in conn.subscriptions and len(conn.subscriptions) >= MAX_SUBSCRIPTIONS:
+            await conn.send("error", {"code": "TOO_MANY_SUBSCRIPTIONS",
+                                      "message": f"at most {MAX_SUBSCRIPTIONS} subscriptions per connection"}, msg.id)
             return
         active = self.gateway.active_contract()
         if msg.contract is not None and (active is None or msg.contract != active.get("tradingsymbol")):
             await conn.send("error", {"code": "CONTRACT_NOT_AVAILABLE",
-                                      "message": "that contract is not streaming; subscribe to the active contract"})
+                                      "message": "that contract is not streaming; subscribe to the active contract"}, msg.id)
             return
-        conn.subscription = (msg.ppr, msg.interval)
+        conn.subscriptions[msg.id] = (msg.ppr, msg.interval)
         await conn.send("subscribed", {"streams": msg.streams, "ppr": msg.ppr, "interval": msg.interval,
-                                       "contract": active.get("tradingsymbol") if active else None})
-        conn.offer_snapshot(self.gateway.chart_snapshot(msg.ppr, msg.interval))
+                                       "contract": active.get("tradingsymbol") if active else None}, msg.id)
+        conn.offer_snapshot(msg.id, self.gateway.chart_snapshot(msg.ppr, msg.interval))
 
     # -- background loops ------------------------------------------------------------------
 
@@ -222,11 +246,10 @@ class StreamHub:
         """Build each distinct subscription's snapshot once and offer it to its subscribers."""
         cache = {}
         for conn in list(self.connections):
-            if conn.subscription is None:
-                continue
-            if conn.subscription not in cache:
-                cache[conn.subscription] = self.gateway.chart_snapshot(*conn.subscription)
-            conn.offer_snapshot(cache[conn.subscription])
+            for sub_id, settings in list(conn.subscriptions.items()):
+                if settings not in cache:
+                    cache[settings] = self.gateway.chart_snapshot(*settings)
+                conn.offer_snapshot(sub_id, cache[settings])
 
     async def heartbeat_once(self) -> None:
         now = time.monotonic()
@@ -256,7 +279,7 @@ class StreamHub:
 
     def stats(self) -> dict:
         return {"connections": len(self.connections),
-                "subscribed": sum(1 for c in self.connections if c.subscription is not None),
+                "subscriptions": sum(len(c.subscriptions) for c in self.connections),
                 "users": len({c.user.id for c in self.connections}),
                 "snapshots_coalesced": sum(c.snapshots_coalesced for c in self.connections),
                 "rejected": dict(self.rejected)}

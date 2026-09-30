@@ -732,3 +732,68 @@ Still open:
 - Entitlements, plans and billing tables.
 - Legacy sockets are only checked at connect time, not re-checked like `/ws/v1/stream`.
 - The new frontend (Phase 5) will use `/ws/v1/stream` and `/api/v1`.
+
+## 19. Phase 5 status
+
+Done on 2026-09-30. See `frontend/README.md`.
+
+**Frontend.** `frontend/`: Next.js 16 (App Router, static export), React 19, TypeScript (strict),
+Tailwind 4, Zustand.
+- Production build is served by FastAPI at `/app`, the same origin as the API and stream.
+- `next dev` proxies the API during development.
+
+**Terminal:**
+- top bar: contract, live status (colour + text), layout 1/2/4, qty/lots, command palette, sign out
+- watchlist with live LTP/change
+- resizable panels
+- up to four independent footprint charts, each with its own interval, row size, cell style, value
+  mode and POC/VA/imbalance toggles
+- order-book ladder: spread, mid, imbalance
+- bottom figures: LTP, bar volume and delta, CVD, and how sides are decided
+- Ctrl/Cmd+K command palette and single-key shortcuts
+- chart settings persisted as versioned JSON with a migration hook
+
+**Chart engine.** OpenAlgo Charts is kept; the decision was made in §4. It is driven imperatively
+through `FootprintController`, so the 2 Hz stream never re-renders React. The behaviour of the old
+page was ported. The library's watermark is off (`branding: false`); its license and NOTICE are
+vendored.
+
+**Stream.** `/ws/v1/stream` now carries up to 6 subscriptions per connection, one per chart, each with
+its own one-snapshot backpressure slot. The client:
+- reconnects with jittered backoff
+- resubscribes after reconnecting
+- answers heartbeats
+- tracks seq
+- refreshes the session on close code 4401
+
+**Security in the UI:**
+- tokens are only ever in HttpOnly cookies
+- CSRF header on writes
+- one shared refresh on 401
+- tooltips and messages are built with textContent, never HTML strings
+
+**Development feed.** `MARKET_DATA_PROVIDER=synthetic` is a random-walk feed that needs no broker,
+credentials or market hours. Nothing from it is recorded: no observations, tick archive or database
+trades. It is refused in production.
+
+**Verified:**
+- frontend: `tsc` and ESLint (React Compiler rules) clean; `next build` OK
+- 18 Vitest unit tests
+- 6 Playwright end-to-end tests against the real backend with the synthetic feed:
+  - redirect when signed out
+  - login error
+  - live data drawn, with no console errors
+  - 4-chart layout
+  - interval change
+  - palette
+  - persistence across reload
+  - sign-out
+- backend: 279 tests
+
+**Still open:**
+- In the 4-chart layout, the per-chart toolbar is wider than the panel and scrolls horizontally.
+- Server-side workspaces and saved layouts; symbol search across instruments; watchlists with several
+  underlyings.
+- Replay in the new UI (the old `/chart?mode=replay` page still works).
+- Drawing tools, alerts UI, volume/market profile panels, DOM trading ladder.
+- The legacy pages (`/`, `/chart`, `/replay`) remain until the new UI reaches parity.
