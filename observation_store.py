@@ -22,16 +22,20 @@ import json
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import config
 
 
+IST = timezone(timedelta(hours=5, minutes=30))   # NSE has no DST
+
+
 def date_str_from_ts_ms(ts_ms: int) -> str:
-    """Calendar date (system-local, i.e. the exchange's own clock for an
-    NSE deployment) a trade timestamp falls on — the session-folder key."""
-    return datetime.fromtimestamp(ts_ms / 1000).strftime(config.SESSION_DATE_FMT)
+    """IST calendar date a trade timestamp falls on — the session-folder key.
+    Explicit IST (not the host's timezone), so the folder is the same on any
+    server and matches the database's session_date."""
+    return datetime.fromtimestamp(ts_ms / 1000, IST).strftime(config.SESSION_DATE_FMT)
 
 
 class _DayJsonlWriter:

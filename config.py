@@ -90,7 +90,17 @@ INSTRUMENTS_CACHE_FILE = "instruments_cache.json"
 INGEST_MODE = os.environ.get("INGEST_MODE", "embedded")
 if INGEST_MODE not in ("embedded", "redis"):
     raise ValueError(f"INGEST_MODE must be 'embedded' or 'redis', got {INGEST_MODE!r}")
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+# Default points at this project's dev Redis (docker-compose.dev.yml, port 56379),
+# not the default 6379, which other local projects may be using.
+REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:56379/0")
+
+# PostgreSQL + TimescaleDB (docker-compose.dev.yml runs one on port 55432).
+# Unset = persistence off: the platform runs exactly as before on JSONL only.
+# Example: postgresql+asyncpg://ofmp:<password>@127.0.0.1:55432/ofmp
+DATABASE_URL = os.environ.get("DATABASE_URL") or None
+# On startup/contract switch, rebuild today's live footprint for the contract
+# from stored trades (needs DATABASE_URL).
+RESTORE_SESSION_ON_START = os.environ.get("RESTORE_SESSION_ON_START", "1").lower() not in ("0", "false", "no")
 
 # Archive every normalized tick (quote-only updates included) under
 # data/ticks/<date>/ — the input needed to re-run the engine over a past
@@ -113,10 +123,9 @@ SESSIONS_DIR = f"{DATA_DIR}/sessions"
 TICKS_DIR = f"{DATA_DIR}/ticks"
 VERIFIED_DATASET_CSV = f"{DATA_DIR}/verified_dataset.csv"
 
-# Local timezone the exchange timestamps (ltt) are effectively already in
-# (NSE trading hours), used only to bucket observations into calendar-day
-# session folders. datetime.fromtimestamp() (system-local) is used
-# throughout for this — kept as one named constant so it's easy to audit.
+# Session dates are IST calendar dates (fixed +05:30, NSE has no DST),
+# computed explicitly rather than from the host's timezone — see
+# observation_store.date_str_from_ts_ms and the database's session_date.
 SESSION_DATE_FMT = "%Y-%m-%d"
 
 

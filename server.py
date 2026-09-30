@@ -24,6 +24,11 @@ from orderbook_engine import (TickProcessorState, group_candle_timestamps, group
                               poc_from_rows, process_tick, stacked_imbalances_from_rows,
                               value_area_from_rows)
 from backend.app.domain.market_data import MarketTick
+from backend.app.domain.orderflow import Trade, restore_trades
+from backend.app.infrastructure.postgres.database import create_engine as create_db_engine
+from backend.app.infrastructure.postgres.repositories import load_session_tape, upsert_instrument
+from backend.app.infrastructure.postgres.rows import ist_date
+from backend.app.infrastructure.postgres.writer import MarketDataWriter
 from backend.app.services.market_data.feeds import EmbeddedFeed, RedisFeed
 from backend.app.services.market_data.recorder import RawTickRecorder
 
@@ -45,6 +50,8 @@ STATE = {
     "last_error": None,
     "started_at": time.time(),
     "observation_store": None,
+    "db_engine": None,    # set at startup when config.DATABASE_URL is configured
+    "db_writer": None,
 }
 FRONTEND_CLIENTS: dict = {}   # websocket -> ppr (price-per-row, 1-5) requested by that client
 CHART_CLIENTS: dict = {}      # same, for the order-flow chart page (/ws/chart)
@@ -74,7 +81,14 @@ def _on_tick(tick: MarketTick):
         # both sides of the switch.
         contract = STATE.get("contract")
         symbol = contract["tradingsymbol"] if contract else None
-        sink = lambda obs, symbol=symbol: obs_store.log({**obs, "symbol": symbol})
+        token = str(contract["token"]) if contract and contract.get("token") is not None else None
+
+        def sink(obs, symbol=symbol, token=token, provider=tick.provider):
+            record = {**obs, "symbol": symbol}
+            trade_id = obs_store.log(record)
+            writer = STATE.get("db_writer")
+            if writer is not None:   # same trade_id as the JSONL record, so the two reconcile exactly
+                writer.record_trade({**record, "trade_id": trade_id}, provider=provider, token=token)
     process_tick(engine, tick_in, observation_sink=sink)
     engine.last_quote = tick  # keep the latest quote around for header display
 
@@ -109,7 +123,9 @@ def LiveFeed(contract: dict, on_tick, on_status):
     if config.INGEST_MODE == "redis":
         return RedisFeed(contract, on_tick=on_tick, on_status=on_status, bus=_redis_bus())
     recorder = RawTickRecorder(config.TICKS_DIR) if config.RECORD_RAW_TICKS else None
-    return EmbeddedFeed(contract, on_tick=on_tick, on_status=on_status, recorder=recorder)
+    writer = STATE.get("db_writer")
+    return EmbeddedFeed(contract, on_tick=on_tick, on_status=on_status, recorder=recorder,
+                        tick_store=writer, on_quality_event=writer.record_quality_event if writer else None)
 
 
 def _make_engine_and_client(contract: dict):
@@ -124,6 +140,26 @@ def _make_engine_and_client(contract: dict):
     engine.last_quote = None
     client = LiveFeed(contract, on_tick=_on_tick, on_status=_on_status)
     return engine, client
+
+
+async def _restore_session(engine: TickProcessorState, contract: dict) -> int:
+    """Record the instrument and rebuild today's footprint/CVD for `contract`
+    from stored trades (see orderflow.restore_trades). Best effort: a
+    database problem is logged and the engine simply starts empty."""
+    db = STATE.get("db_engine")
+    if db is None:
+        return 0
+    try:
+        await upsert_instrument(db, contract, instrument_type=config.INSTRUMENT_TYPE)
+        if not config.RESTORE_SESSION_ON_START:
+            return 0
+        tape, (bids, asks) = await load_session_tape(db, "angelone", contract["tradingsymbol"],
+                                                     ist_date(int(time.time() * 1000)))
+    except Exception as e:
+        print(f"[server] Session restore skipped (database: {e!r})")
+        return 0
+    trades = [Trade(timestamp=ts, price=price, quantity=qty, side=side) for ts, price, qty, side in tape]
+    return restore_trades(engine, trades, bids, asks)
 
 
 async def _activate_contract(contract: dict) -> None:
@@ -143,6 +179,7 @@ async def _activate_contract(contract: dict) -> None:
                 await old_task
 
         engine, client = _make_engine_and_client(contract)
+        restored = await _restore_session(engine, contract)
         STATE["contract"] = contract
         STATE["engine"] = engine
         STATE["connected"] = False
@@ -150,17 +187,24 @@ async def _activate_contract(contract: dict) -> None:
         STATE["ws_client"] = client
         app.state.ws_task = asyncio.create_task(client.run())
         print(f"[server] Active contract: {contract['tradingsymbol']} "
-              f"(token {contract.get('token')}, tick size {contract['tick_size']})")
+              f"(token {contract.get('token')}, tick size {contract['tick_size']})"
+              + (f", restored {restored} trades from today's session" if restored else ""))
 
 
 @app.on_event("startup")
 async def startup():
-    await _activate_contract(await _resolve_default_contract())
+    if config.DATABASE_URL:
+        STATE["db_engine"] = create_db_engine(config.DATABASE_URL)
+        STATE["db_writer"] = MarketDataWriter(STATE["db_engine"])
+        app.state.db_writer_task = asyncio.create_task(STATE["db_writer"].run())
+        print("[server] Persisting raw ticks, trades and data-quality events to the database")
 
     if config.COLLECT_OBSERVATIONS:
         STATE["observation_store"] = ObservationStore()
         print(f"[server] Logging trade observations to {config.SESSIONS_DIR}/<date>/observations.jsonl "
               f"(review live or later via review_cli.py, or visually via /replay)")
+
+    await _activate_contract(await _resolve_default_contract())
 
     app.state.broadcast_task = asyncio.create_task(_broadcast_loop())
 
@@ -175,6 +219,14 @@ async def shutdown():
             t.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await t
+    writer, writer_task = STATE.get("db_writer"), getattr(app.state, "db_writer_task", None)
+    if writer is not None and writer_task is not None:
+        writer.stop()
+        writer_task.cancel()                      # run()'s finally flushes what is still buffered
+        with contextlib.suppress(asyncio.CancelledError):
+            await writer_task
+    if STATE.get("db_engine") is not None:
+        await STATE["db_engine"].dispose()
 
 
 def _candles_payload(fp, cvd_by_candle: dict, ppr: int,
@@ -636,6 +688,7 @@ async def api_status():
         "tick_count": STATE["engine"].tick_count if STATE["engine"] else 0,
         "uptime_sec": time.time() - STATE["started_at"],
         "feed": _feed_health(),
+        "database": STATE["db_writer"].stats() if STATE.get("db_writer") else None,
     }
 
 

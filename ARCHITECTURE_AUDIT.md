@@ -626,3 +626,37 @@ Still open:
 - The observation JSONL write is still synchronous on the event loop (Phase 3 replaces it).
 - Not exercised against the live Angel feed in this session: covered by unit tests with a fake
   WebSocket, and by an end-to-end worker → Redis → API test on fakeredis.
+
+
+## 17. Phase 3 status
+
+Done on 2026-09-30, on branch `phase3-persistence` (stacked on `phase2-market-data`). See
+`docs/database.md`.
+
+- **Local database.** TimescaleDB (PostgreSQL 16) and Redis in `docker-compose.dev.yml`, on offset
+  ports 55432 and 56379. The previous default `REDIS_URL` pointed at port 6379, which on this machine
+  belongs to another project's Redis; that is fixed.
+- **Schema and migration.** Alembic migration `0001`:
+  - `raw_ticks` and `trades` hypertables
+  - `data_quality_events`, `instruments`, and seeded `algorithm_versions`
+  - tested up/down/up with no drift reported by `alembic check`
+- **`MarketDataWriter`.** Batched, idempotent and non-blocking. It buffers through database outages,
+  bounded at 500,000 rows per table.
+  - Raw ticks and quality events come from whichever process holds the broker connection.
+  - Trades come from the API, with the same `trade_id` as the JSONL record.
+- **Session restore.** The server rebuilds today's footprint and CVD from stored trades when a
+  contract is activated. The restored state is verified identical to the live engine's.
+- **Session dates in IST.** Session dates are explicit IST everywhere (JSONL folders and database)
+  instead of the host's timezone.
+- **CLI** (`python -m backend.app.cli`): `migrate`, `import-sessions`, `import-ticks`, `reconcile`,
+  `db-status`.
+- **Backfill.** All 40,460 recorded trades (2026-09-22..30) were imported into the dev database, and
+  every session reconciles exactly against the JSONL files.
+
+Still open:
+
+- Compression and retention policies; Parquet export to object storage.
+- A scheduled daily reconcile job.
+- Removing the JSONL dual-write.
+- The observation JSONL append is still synchronous on the event loop. It goes away with the
+  dual-write rather than being rewritten.

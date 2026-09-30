@@ -28,7 +28,12 @@ class EmbeddedFeed:
     def __init__(self, contract: dict, on_tick: Callable[[MarketTick], None],
                  on_status: Optional[Callable[..., None]] = None,
                  provider: Optional[MarketDataProvider] = None,
-                 recorder: Optional[RawTickRecorder] = None):
+                 recorder: Optional[RawTickRecorder] = None,
+                 tick_store=None, on_quality_event=None):
+        """recorder: raw tick archive, run and stopped by this feed.
+        tick_store: object with record_tick(tick) (e.g. MarketDataWriter);
+        its lifecycle is owned by the caller.
+        on_quality_event: callable(DataQualityEvent), default logs it."""
         if provider is None:
             from backend.app.infrastructure.providers.angelone import AngelOneProvider
             provider = AngelOneProvider()
@@ -36,11 +41,15 @@ class EmbeddedFeed:
         self.instrument = InstrumentRef.from_contract(contract, provider=provider.name)
         self.on_tick = on_tick
         self.recorder = recorder
-        self.runner = ProviderRunner(provider, self._sink, [self.instrument], on_status=on_status)
+        self.tick_store = tick_store
+        self.runner = ProviderRunner(provider, self._sink, [self.instrument], on_status=on_status,
+                                     on_quality_event=on_quality_event)
 
     def _sink(self, tick: MarketTick) -> None:
         if self.recorder is not None:
             self.recorder.record(tick)     # archive first: a consumer failure must not lose the tick
+        if self.tick_store is not None:
+            self.tick_store.record_tick(tick)
         self.on_tick(tick)
 
     def stop(self) -> None:

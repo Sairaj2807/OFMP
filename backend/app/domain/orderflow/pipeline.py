@@ -189,3 +189,29 @@ def process_tick(state: TickProcessorState, tick: dict,
     state.last_trade_ts_ms = tick["ltt"]
     state.volume_since_last_price_change = vol_since_price_change
     return result
+
+
+def restore_trades(state: TickProcessorState, trades: list, bids=None, asks=None) -> int:
+    """Rebuild aggregation state (footprint, candle rollover, CVD, trade tape)
+    from already-classified trades, oldest first — e.g. today's stored trades
+    after a restart. Never re-classifies: each Trade keeps the side it was
+    recorded with. `bids`/`asks` ([(price, qty, orders), ...]) optionally seed
+    the book with the last known depth.
+
+    Deliberately NOT restored: the cumulative-volume baseline (the first live
+    tick afterwards primes it, so trades that happened while the process was
+    down are never folded into one fabricated trade) and the quote-change
+    time (the stale-quote fallback cannot fire until the quote next changes).
+    Returns the number of trades applied."""
+    last = None
+    for trade in trades:
+        advance_candle(state, state.footprint.add_trade(trade))
+        last = trade
+    if last is not None:
+        state.last_price, state.last_side = last.price, last.side
+        state.last_trade_ts_ms = last.timestamp
+    if bids is not None:
+        state.book.replace_side("BUY", [tuple(level) for level in bids])
+    if asks is not None:
+        state.book.replace_side("SELL", [tuple(level) for level in asks])
+    return len(trades)

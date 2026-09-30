@@ -2,7 +2,7 @@
 when INGEST_MODE=redis.
 
     broker --(provider)--> normalize --> Redis stream md:ticks:<token> --> API process(es)
-                                    \--> raw tick archive (data/ticks/)
+                                    +--> raw tick archive (data/ticks/)
 
 It subscribes to whatever the API last asked for (md:desired, changes via
 md:control) and publishes its health to md:health every second. Restarting
@@ -26,14 +26,22 @@ log = logging.getLogger(__name__)
 async def run_ingest_worker(bus: RedisMarketDataBus, provider: MarketDataProvider,
                             recorder: Optional[RawTickRecorder] = None,
                             health_interval_sec: float = 1.0, control_block_ms: int = 1000,
-                            runner_kwargs: Optional[dict] = None) -> None:
+                            runner_kwargs: Optional[dict] = None, writer=None) -> None:
+    """writer: optional MarketDataWriter — raw ticks and data-quality events
+    go to the database too; its flush loop runs inside this worker."""
     async def sink(tick):
         if recorder is not None:
             recorder.record(tick)
+        if writer is not None:
+            writer.record_tick(tick)
         await bus.publish_tick(tick)
 
+    runner_kwargs = dict(runner_kwargs or {})
+    if writer is not None:
+        runner_kwargs.setdefault("on_quality_event", writer.record_quality_event)
+
     control_id = await bus.latest_control_id()        # before reading desired: no change can slip between
-    runner = ProviderRunner(provider, sink, await bus.get_desired(), **(runner_kwargs or {}))
+    runner = ProviderRunner(provider, sink, await bus.get_desired(), **runner_kwargs)
 
     async def control_loop():
         nonlocal control_id
@@ -62,12 +70,16 @@ async def run_ingest_worker(bus: RedisMarketDataBus, provider: MarketDataProvide
     tasks = [asyncio.create_task(control_loop()), asyncio.create_task(health_loop())]
     if recorder is not None:
         tasks.append(asyncio.create_task(recorder.run()))
+    if writer is not None:
+        tasks.append(asyncio.create_task(writer.run()))
     try:
         await runner.run()
     finally:
         runner.stop()
         if recorder is not None:
             recorder.stop()
+        if writer is not None:
+            writer.stop()
         for t in tasks:
             t.cancel()
         for t in tasks:
@@ -84,9 +96,14 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     bus = RedisMarketDataBus(aioredis.from_url(config.REDIS_URL))
     recorder = RawTickRecorder(config.TICKS_DIR) if config.RECORD_RAW_TICKS else None
-    log.info("ingest worker starting (redis %s, raw ticks %s)", config.REDIS_URL,
-             config.TICKS_DIR if recorder else "off")
-    asyncio.run(run_ingest_worker(bus, AngelOneProvider(), recorder))
+    writer = None
+    if config.DATABASE_URL:
+        from backend.app.infrastructure.postgres.database import create_engine
+        from backend.app.infrastructure.postgres.writer import MarketDataWriter
+        writer = MarketDataWriter(create_engine(config.DATABASE_URL))
+    log.info("ingest worker starting (redis %s, raw ticks %s, database %s)", config.REDIS_URL,
+             config.TICKS_DIR if recorder else "off", "on" if writer else "off")
+    asyncio.run(run_ingest_worker(bus, AngelOneProvider(), recorder, writer=writer))
 
 
 if __name__ == "__main__":

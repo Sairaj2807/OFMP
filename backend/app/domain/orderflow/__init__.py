@@ -11,7 +11,7 @@ from .cvd import CVDTracker
 from .footprint import Footprint
 from .models import FootprintCell, FootprintRow, Trade, TradeSide
 from .orderbook import OrderBook
-from .pipeline import TickProcessorState, TradeEvent, advance_candle, process_tick
+from .pipeline import TickProcessorState, TradeEvent, advance_candle, process_tick, restore_trades
 from .registry import CLASSIFIERS, DEFAULT_CLASSIFIER, ENGINE_ALGORITHMS, get_classifier
 from .volume import CumulativeVolumeExtractor
 
@@ -21,5 +21,6 @@ __all__ = [
     "LeeReadyClassifier", "OrderBook", "TickProcessorState", "TickRuleClassifier", "Trade",
     "TradeClassifier", "TradeEvent", "TradeSide", "VtrenderReconstructedClassifierV1", "advance_candle",
     "get_classifier", "group_candle_timestamps", "group_native_bars", "poc_from_rows", "process_tick",
+    "restore_trades",
     "stacked_imbalances_from_rows", "value_area_from_rows",
 ]
