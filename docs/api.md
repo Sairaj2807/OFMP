@@ -103,6 +103,7 @@ Checked server-side on every route (`require_permission`).
 | GET | `/health` | — | summary |
 | GET | `/api/v1/market/status` | `market.read` | active contract, feed health, and `session` (NSE calendar: `open`, today's `session`, `holiday`, `next_open`, `calendar_covers_today`) |
 | GET | `/api/v1/market/contracts` | `market.read` | switchable contracts |
+| GET | `/api/v1/market/profile?date=&row=` | `market.read` | a stored session's market profile (`row` in points: 1, 2, 5, 10, 20, 50; default 5); `404` if nothing is stored. See `docs/market-profile.md` |
 | GET | `/api/v1/admin/users` | `admin.users` | cursor-paginated by email |
 | GET | `/api/v1/admin/system` | `admin.system` | feed, database writer, WebSocket stats |
 | POST | `/api/v1/admin/contract` | `admin.system` | `{token}` from `/market/contracts`: switch the live feed (resets the live footprint; audited as `contract.switch`); `422 UNKNOWN_CONTRACT` otherwise |
@@ -232,6 +233,16 @@ nor on the trades restored at startup. Permissions: `alerts.read`, `alerts.creat
 
 **Backpressure.** A connection holds at most one pending snapshot. If the client falls behind,
 intermediate snapshots are replaced by the newest one, so memory per connection stays constant.
+
+### Market profile over the stream
+
+Add `"view": "profile"` and `"row": 5` (points per row: 1, 2, 5, 10, 20 or 50) to a `subscribe` or `replay`
+message. That chart id then receives market profile snapshots: `data.view = "profile"`, `data.profile`
+(rows with letters, TPO count, volume, buy, sell and delta; POCs; value areas; initial balance; single
+prints; tails; HVN/LVN; session figures; the previous session's levels), plus `status` and `quote`.
+
+Each chart id has its own view. Re-sending `replay` for the same date with another view keeps the
+position. An unsupported row size is rejected with `INVALID_ROW`. Definitions: `docs/market-profile.md`.
 
 ### Replay over the stream
 

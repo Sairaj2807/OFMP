@@ -26,6 +26,7 @@ be read as a live-quality L2 reconstruction between trades.
 from typing import Optional
 
 import config
+from backend.app.domain.profile import NSE_SESSION, SessionProfile
 from orderbook_engine import CVDTracker, Footprint, OrderBook, Trade, _advance_candle
 
 
@@ -38,6 +39,7 @@ class ReplayState:
         self.last_candle_seen: Optional[int] = None
         self.trade_count = 0
         self.last_observation: Optional[dict] = None
+        self.profile = SessionProfile(tick_size, NSE_SESSION)   # stored sessions are NSE sessions
 
 
 def trades_from_record(obs: dict) -> list:
@@ -59,6 +61,7 @@ def apply_record(state: ReplayState, obs: dict) -> None:
     for trade in trades_from_record(obs):
         candle_ts = state.footprint.add_trade(trade)
         _advance_candle(state, candle_ts)
+        state.profile.add_trade(trade.timestamp, trade.price, trade.quantity, trade.side)
     if obs.get("bid_levels") is not None:
         state.book.replace_side("BUY", [tuple(lvl) for lvl in obs["bid_levels"]])
     if obs.get("ask_levels") is not None:

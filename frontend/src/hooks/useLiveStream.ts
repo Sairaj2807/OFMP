@@ -41,8 +41,10 @@ export const useReplayMeta = create<{ meta: Record<string, ReplayMeta | undefine
 /** The live connection, for components that send controls (replay bar). */
 export const streamRef: { current: StreamClient | null } = { current: null };
 
-const keyOf = (c: { id: string; ppr: number; interval: number; mode: string; replayDate: string | null }) =>
-  [c.id, c.ppr, c.interval, c.mode, c.mode === "replay" ? c.replayDate : ""].join("|");
+const keyOf = (c: { id: string; ppr: number; interval: number; mode: string; replayDate: string | null;
+                    view: string; profileRow: number }) =>
+  [c.id, c.ppr, c.interval, c.mode, c.mode === "replay" ? c.replayDate : "", c.view,
+   c.view === "profile" ? c.profileRow : ""].join("|");
 
 export function useLiveStream(enabled: boolean): void {
   const sent = useRef(new Map<string, string>()); // id -> settings key last sent
@@ -92,11 +94,13 @@ export function useLiveStream(enabled: boolean): void {
       if (sent.current.get(id) === key) continue; // unchanged chart: nothing to send
       sent.current.set(id, key);
       const cfg = all.find((x) => x.id === id)!;
+      const settings = { ppr: cfg.ppr, interval: cfg.interval, view: cfg.view, row: cfg.profileRow };
+      snapshotBus.forget(id);                 // a footprint must never be drawn as a profile, or vice versa
       if (cfg.mode === "replay" && cfg.replayDate) {
-        c.replay(id, cfg.replayDate, { ppr: cfg.ppr, interval: cfg.interval });
+        c.replay(id, cfg.replayDate, settings);
       } else {
         useReplayMeta.getState().set(id, undefined);
-        c.subscribe(id, { ppr: cfg.ppr, interval: cfg.interval });
+        c.subscribe(id, settings);
       }
     }
     for (const id of CHART_IDS) {

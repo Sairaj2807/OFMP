@@ -17,6 +17,7 @@ import { ChartGrid } from "./ChartGrid";
 import { type Command, CommandPalette } from "./CommandPalette";
 import { OrderBook } from "./OrderBook";
 import { TopBar } from "./TopBar";
+import { ViewRail } from "./ViewRail";
 import { Watchlist } from "./Watchlist";
 
 /**
@@ -89,6 +90,13 @@ export function Terminal() {
         id: `layout-${n}`, group: "Layout", label: `${n} chart${n > 1 ? "s" : ""}`, run: () => t().setLayout(n),
       })),
       ...[1, 2, 3, 4].map((n) => ({ id: `focus-${n}`, group: "Focus", label: `Chart c${n}`, run: () => t().setActiveChart(`c${n}`) })),
+      { id: "view-toggle", group: "Chart type", label: "Footprint / market profile on the focused chart", shortcut: "M",
+        run: () => t().updateChart(active(), { view: t().charts.find((c) => c.id === active())?.view === "profile"
+          ? "footprint" : "profile" }) },
+      { id: "view-footprint", group: "Chart type", label: "Order-flow footprint on the focused chart",
+        run: () => t().updateChart(active(), { view: "footprint" }) },
+      { id: "view-profile", group: "Chart type", label: "Market profile on the focused chart",
+        run: () => t().updateChart(active(), { view: "profile" }) },
       { id: "poc", group: "Toggle", label: "Point of control", shortcut: "P", run: toggle("showPoc") },
       { id: "va", group: "Toggle", label: "Value area", shortcut: "V", run: toggle("showValueArea") },
       { id: "imb", group: "Toggle", label: "Stacked imbalances", shortcut: "I", run: toggle("showImbalances") },
@@ -129,7 +137,9 @@ export function Terminal() {
   return (
     <div className="flex h-full flex-col">
       <TopBar onOpenPalette={() => setPaletteOpen(true)} onLogout={logout} />
-      <main className="min-h-0 flex-1">
+      <main className="flex min-h-0 flex-1">
+        <ViewRail />
+        <div className="min-w-0 flex-1">
         <Group orientation="horizontal" id="terminal-main">
           <Panel id="watchlist" defaultSize="16" minSize={160} collapsible collapsedSize={0}>
             <Watchlist />
@@ -143,6 +153,7 @@ export function Terminal() {
             <OrderBook />
           </Panel>
         </Group>
+        </div>
       </main>
       <BottomBar />
       <AlertToasts />

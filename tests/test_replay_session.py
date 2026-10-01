@@ -42,6 +42,21 @@ def test_seek_forward_and_backward_match_the_one_shot_rebuild(records):
         assert s.index == expected.trade_count
 
 
+def test_profile_follows_seek_forward_and_backward(records):
+    """The replay's market profile at any cursor equals one built fresh from the
+    trades up to that cursor (seeking back rebuilds; nothing leaks across)."""
+    from backend.app.domain.profile import NSE_SESSION, SessionProfile, build_profile
+    s = ReplaySession("2026-09-29", records, TICK, clock=Clock())
+    for target in (records[-1]["ts_ms"], records[300]["ts_ms"], records[1000]["ts_ms"], records[10]["ts_ms"]):
+        s.seek(target)
+        fresh = SessionProfile(TICK, NSE_SESSION)
+        for r in records:
+            if r["ts_ms"] > target:
+                break
+            fresh.add_trade(r["ts_ms"], r["ltp"], r["qty"], r["algo_side"])
+        assert build_profile(s.state.profile, 5) == build_profile(fresh, 5), target
+
+
 def test_play_advances_by_elapsed_time_times_speed_and_pause_freezes(records):
     clock = Clock()
     s = ReplaySession("d", records, TICK, clock=clock)

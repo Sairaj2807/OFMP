@@ -65,6 +65,14 @@ async def trade_counts_by_session(engine: AsyncEngine, provider: Optional[str] =
         return {d: n for d, n in (await conn.execute(stmt)).all()}
 
 
+async def previous_session_date(engine: AsyncEngine, provider: str, symbol: str, before: date) -> Optional[date]:
+    """The latest session before `before` with stored trades of `symbol` (None if there is none)."""
+    stmt = sa.select(sa.func.max(trades.c.session_date)).where(
+        trades.c.provider == provider, trades.c.symbol == symbol, trades.c.session_date < before)
+    async with engine.connect() as conn:
+        return (await conn.execute(stmt)).scalar_one_or_none()
+
+
 async def raw_tick_count(engine: AsyncEngine) -> int:
     async with engine.connect() as conn:
         return (await conn.execute(sa.select(sa.func.count()).select_from(raw_ticks))).scalar_one()

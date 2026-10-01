@@ -10,6 +10,9 @@ export type DisplayMode = "bidask" | "delta" | "volume";
 export type Layout = 1 | 2 | 4;
 export type Units = "qty" | "lots";
 export type ChartMode = "live" | "replay";
+export type ChartView = "footprint" | "profile";
+export const PROFILE_ROWS = [1, 2, 5, 10, 20, 50] as const;      // market profile row sizes, points
+export const DEFAULT_PROFILE_ROW = 5;
 
 export interface ChartConfig {
   id: string;
@@ -22,6 +25,8 @@ export interface ChartConfig {
   showImbalances: boolean;
   mode: ChartMode;
   replayDate: string | null; // session replayed when mode === "replay"
+  view: ChartView;           // order-flow footprint or market profile, per chart
+  profileRow: number;        // market profile row size, points
 }
 
 export const CHART_IDS = ["c1", "c2", "c3", "c4"] as const;
@@ -30,6 +35,7 @@ export const DEFAULT_INTERVALS = [60, 180, 300, 900, 1800];
 const defaultChart = (id: string, interval: number): ChartConfig => ({
   id, interval, ppr: 1, cellStyle: "profile", displayMode: "bidask",
   showPoc: true, showValueArea: true, showImbalances: true, mode: "live", replayDate: null,
+  view: "footprint", profileRow: DEFAULT_PROFILE_ROW,
 });
 
 /** The persisted/synced part of the terminal state. */
@@ -56,13 +62,14 @@ export const initialTerminal: TerminalConfig = {
 };
 
 export const STORAGE_KEY = "ofmp.terminal";
-export const STORAGE_VERSION = 2;
+export const STORAGE_VERSION = 3;
 
 /**
  * Brings any saved config (localStorage or a server workspace, any version)
  * to the current shape. Unknown or invalid fields fall back to defaults
  * field by field, so one bad value never discards a whole layout.
  *   v1 -> v2: charts gained mode/replayDate (existing charts become live).
+ *   v2 -> v3: charts gained view/profileRow (existing charts stay footprints, 5-point rows).
  */
 export function migrateConfig(raw: unknown): TerminalConfig {
   const src = (raw && typeof raw === "object" ? raw : {}) as Partial<TerminalConfig>;
@@ -77,6 +84,8 @@ export function migrateConfig(raw: unknown): TerminalConfig {
     if (c.mode !== "live" && c.mode !== "replay") c.mode = "live";
     if (typeof c.replayDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(c.replayDate)) c.replayDate = null;
     if (c.mode === "replay" && !c.replayDate) c.mode = "live";
+    if (c.view !== "footprint" && c.view !== "profile") c.view = "footprint";
+    if (!(PROFILE_ROWS as readonly number[]).includes(c.profileRow)) c.profileRow = DEFAULT_PROFILE_ROW;
     for (const k of ["showPoc", "showValueArea", "showImbalances"] as const) if (typeof c[k] !== "boolean") c[k] = def[k];
     return c;
   });

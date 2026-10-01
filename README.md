@@ -47,6 +47,7 @@ A change in classifier behaviour ships as a new classifier version. See `docs/or
 |---|---|
 | Architecture audit and phase log | `ARCHITECTURE_AUDIT.md` |
 | Order-flow engine and classifier versioning | `docs/orderflow-engine.md` |
+| Market Profile (TPO, value area, IB, single prints) | `docs/market-profile.md` |
 | Market data, providers, ingest worker | `docs/market-data.md` |
 | Database, persistence, session restore | `docs/database.md` |
 | API, authentication, WebSocket stream | `docs/api.md` |

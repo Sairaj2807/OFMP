@@ -23,6 +23,15 @@ class MarketGateway(Protocol):
     def chart_snapshot(self, ppr: int, interval_sec: int) -> dict:
         """The live order-flow chart snapshot for these display settings."""
 
+    def profile_snapshot(self, row: float) -> dict:
+        """The live market profile snapshot (data.view == "profile") at this row size, in points."""
+
+    async def session_profile(self, date: str, row: float) -> Optional[dict]:
+        """A stored session's whole market profile (None if nothing is stored for that date)."""
+
+    def replay_profile_snapshot(self, session, row: float) -> dict:
+        """A market profile snapshot of the replay's current position (with data.replay meta)."""
+
     async def replay_sessions(self) -> list:
         """[{date, trades}] of stored sessions available for replay."""
 

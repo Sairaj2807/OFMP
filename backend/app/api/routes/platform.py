@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.app.api.deps import get_auth_service, request_info, require_permission
 from backend.app.api.schemas import Page
 from backend.app.core.errors import AppError
+from backend.app.domain.profile import DEFAULT_ROW, ROW_SIZES
 from backend.app.infrastructure.postgres.schema import audit_logs
 from backend.app.services.auth.service import AuthService, AuthUser
 
@@ -84,6 +85,18 @@ async def market_status(request: Request):
                    summary="Stored sessions available for replay")
 async def replay_sessions(request: Request):
     return {"data": await _gateway(request).replay_sessions()}
+
+
+@market_router.get("/profile", dependencies=[Depends(require_permission("market.read"))],
+                   summary="A stored session's market profile (TPO + volume at price)")
+async def session_profile(request: Request, date: str = Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),
+                          row: int = Query(DEFAULT_ROW)):
+    if row not in ROW_SIZES:
+        raise AppError("INVALID_ROW", f"row must be one of {list(ROW_SIZES)}", 422)
+    profile = await _gateway(request).session_profile(date, row)
+    if profile is None:
+        raise AppError("NOT_FOUND", f"no trades stored for {date}", 404)
+    return profile
 
 
 @market_router.get("/contracts", dependencies=[Depends(require_permission("market.read"))],

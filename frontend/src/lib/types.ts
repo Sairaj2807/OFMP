@@ -45,9 +45,13 @@ export interface EngineBar {
 
 export type BookLevel = [price: number, qty: number, orders: number];
 
+export type ChartView = "footprint" | "profile";
+
 export interface ChartSnapshot {
   ready: boolean;
   mode?: "live" | "replay";
+  view?: "profile";              // absent on footprint snapshots
+  profile?: MarketProfile;
   status?: {
     connected: boolean;
     error: string | null;
@@ -112,6 +116,55 @@ export interface Workspace extends WorkspaceSummary {
 export interface ChartSettings {
   ppr: number;
   interval: number;
+  view?: ChartView;
+  row?: number;                  // market profile row size, points
+}
+
+/** One price row of a market profile (high to low in MarketProfile.rows). */
+export interface ProfileRow {
+  price: number;                 // row floor
+  letters: string;               // one letter per period whose high-low range covers the row
+  tpo: number;
+  volume: number;
+  buy: number;
+  sell: number;
+  delta: number;
+}
+
+export interface MarketProfileLevels {
+  date: string;
+  poc_tpo: number | null;
+  poc_volume: number | null;
+  vah: number | null;
+  val: number | null;
+  high: number;
+  low: number;
+}
+
+/** A session's market profile (backend/app/domain/profile). */
+export interface MarketProfile {
+  date: string | null;
+  empty?: boolean;
+  row_size?: number;
+  tick_size?: number;
+  period_minutes?: number;
+  periods?: { index: number; letter: string; start_ms: number; high: number; low: number }[];
+  current_period?: number | null;
+  rows: ProfileRow[];
+  poc_tpo?: number | null;
+  poc_volume?: number | null;
+  value_area_tpo?: { low: number; high: number } | null;
+  value_area_volume?: { low: number; high: number } | null;
+  value_area_pct?: number;
+  initial_balance?: { high: number | null; low: number | null; final: boolean; range: number | null;
+                      extension_up: number | null; extension_down: number | null };
+  single_prints?: { low: number; high: number; letter: string }[];
+  tails?: { low: number; high: number; letter: string; kind: "buying" | "selling" }[];
+  hvn?: number[];
+  lvn?: number[];
+  stats?: { open: number; high: number; low: number; close: number; tpo_total: number; volume: number;
+            delta: number; trades: number };
+  previous?: MarketProfileLevels | null;
 }
 
 export interface ServerMessage {

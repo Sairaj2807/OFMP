@@ -29,9 +29,11 @@ from backend.app.core.logging import configure_logging
 from backend.app.domain.market_data import MarketTick
 from backend.app.infrastructure.providers.synthetic import SYNTHETIC_CONTRACT, SyntheticProvider
 from backend.app.domain.orderflow import Trade, restore_trades
+from backend.app.domain.profile import ALL_DAY_SESSION, NSE_SESSION, SessionProfile, build_profile
 from backend.app.infrastructure.postgres.database import create_engine as create_db_engine
 from backend.app.infrastructure.postgres.repositories import (load_session_tape, load_trades_by_date,
-                                                              trade_counts_by_session, upsert_instrument)
+                                                              previous_session_date, trade_counts_by_session,
+                                                              upsert_instrument)
 from backend.app.services.replay import ReplayLibrary, ReplaySession
 from backend.app.infrastructure.postgres.rows import ist_date
 from backend.app.infrastructure.postgres.writer import MarketDataWriter
@@ -105,6 +107,9 @@ def _on_tick(tick: MarketTick):
     stop = metrics.timed(metrics.TICK_PROCESSING)
     result = process_tick(engine, tick_in, observation_sink=sink)
     stop()
+    profile = getattr(engine, "profile", None)
+    if profile is not None and result.get("new_trade"):
+        profile.add_trade(tick_in["ltt"], tick_in["ltp"], result["qty"], result["side"])
     if result.get("new_trade") and engine.last_classification is not None:
         c = engine.last_classification
         metrics.TRADES_CLASSIFIED.labels(c.classifier_name, c.classifier_version, c.side).inc()
@@ -161,8 +166,14 @@ def _make_engine_and_client(contract: dict):
     footprint/CVD history over, the same as a server restart would."""
     engine = TickProcessorState(contract["tick_size"])
     engine.last_quote = None
+    engine.profile = _new_profile(contract["tick_size"])
     client = LiveFeed(contract, on_tick=_on_tick, on_status=_on_status)
     return engine, client
+
+
+def _new_profile(tick_size: float) -> SessionProfile:
+    """The session's market profile, fed the same classified trades as the footprint."""
+    return SessionProfile(tick_size, ALL_DAY_SESSION if config.SYNTHETIC_FEED else NSE_SESSION)
 
 
 async def _restore_session(engine: TickProcessorState, contract: dict) -> int:
@@ -172,15 +183,26 @@ async def _restore_session(engine: TickProcessorState, contract: dict) -> int:
     db = STATE.get("db_engine")
     if db is None or config.SYNTHETIC_FEED:
         return 0
+    symbol, today = contract["tradingsymbol"], ist_date(int(time.time() * 1000))
     try:
         await upsert_instrument(db, contract, instrument_type=config.INSTRUMENT_TYPE)
         if not config.RESTORE_SESSION_ON_START:
             return 0
-        tape, (bids, asks) = await load_session_tape(db, "angelone", contract["tradingsymbol"],
-                                                     ist_date(int(time.time() * 1000)))
+        tape, (bids, asks) = await load_session_tape(db, "angelone", symbol, today)
+        prev_day = await previous_session_date(db, "angelone", symbol, today)
+        prev_tape = (await load_session_tape(db, "angelone", symbol, prev_day))[0] if prev_day else []
     except Exception as e:
         print(f"[server] Session restore skipped (database: {e!r})")
         return 0
+    if getattr(engine, "profile", None) is None:
+        engine.profile = _new_profile(contract["tick_size"])
+    if prev_tape:                       # yesterday's profile: reference levels (POC / VAH / VAL)
+        previous = SessionProfile(contract["tick_size"], engine.profile.session)
+        for ts, price, qty, side in prev_tape:
+            previous.add_trade(ts, price, qty, side)
+        engine.profile.previous = previous
+    for ts, price, qty, side in tape:
+        engine.profile.add_trade(ts, price, qty, side)
     trades = [Trade(timestamp=ts, price=price, quantity=qty, side=side) for ts, price, qty, side in tape]
     return restore_trades(engine, trades, bids, asks)
 
@@ -410,6 +432,25 @@ def _build_chart_snapshot(ppr: int = 1, interval_sec: int = config.CANDLE_INTERV
     }
 
 
+def _profile_view(profile: SessionProfile, row: float) -> dict:
+    return build_profile(profile, row) or {"date": None, "rows": [], "empty": True}
+
+
+def _build_profile_snapshot(row: float) -> dict:
+    engine: TickProcessorState = STATE["engine"]
+    contract = STATE["contract"]
+    if engine is None or contract is None:
+        return {"ready": False, "view": "profile"}
+    return {
+        "ready": True,
+        "mode": "live",
+        "view": "profile",
+        "status": _status_payload(engine, contract),
+        "quote": _quote_payload(engine),
+        "profile": _profile_view(engine.profile, row),
+    }
+
+
 class ServerMarketGateway:
     """The live engine, as the /api/v1 layer sees it (backend/app/api/gateway.py)."""
 
@@ -434,6 +475,19 @@ class ServerMarketGateway:
 
     def chart_snapshot(self, ppr: int, interval_sec: int) -> dict:
         return _build_chart_snapshot(ppr, interval_sec)
+
+    def profile_snapshot(self, row: float) -> dict:
+        return _build_profile_snapshot(row)
+
+    async def session_profile(self, date: str, row: float) -> Optional[dict]:
+        records = await _replay_library().records(date)
+        if not records:
+            return None
+        contract = STATE.get("contract")
+        profile = SessionProfile(contract["tick_size"] if contract else 0.1, NSE_SESSION)
+        for r in records:
+            profile.add_trade(r["ts_ms"], r["ltp"], r["qty"], r["algo_side"])
+        return build_profile(profile, row)
 
     # -- replay (server-side, same aggregation code as live) --------------------------
 
@@ -465,6 +519,11 @@ class ServerMarketGateway:
                                     interval_sec=_clamp_chart_interval(interval_sec)),
             "replay": session.meta(),
         }
+
+    def replay_profile_snapshot(self, session: ReplaySession, row: float) -> dict:
+        snap = self.replay_snapshot(session, 1, config.CANDLE_INTERVAL_SEC)
+        del snap["chart"], snap["book"], snap["source"]
+        return {**snap, "view": "profile", "profile": _profile_view(session.state.profile, row)}
 
 
 _REPLAY_LIBRARY: Optional[ReplayLibrary] = None

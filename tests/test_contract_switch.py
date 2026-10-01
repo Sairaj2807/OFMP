@@ -166,6 +166,22 @@ def test_on_tick_tags_correctly_across_a_mid_stream_switch():
     assert symbols == ["NIFTY24SEP26FUT", "NIFTY29OCT26FUT"]
 
 
+def test_live_trades_feed_the_market_profile_and_a_switch_starts_a_new_one():
+    run(server._activate_contract(contract("NIFTY24SEP26FUT")))
+    profile = server.STATE["engine"].profile
+    t0 = 1_790_655_000_000                                   # 2026-09-29 09:40 IST: inside the NSE session
+    server._on_tick(make_tick(ltt=t0, cum_volume=0))
+    server._on_tick(make_tick(ltp=100.0, ltt=t0 + 1000, cum_volume=65))
+    server._on_tick(make_tick(ltp=100.5, ltt=t0 + 2000, cum_volume=195))
+    assert profile.trades == 2 and profile.date == "2026-09-29"
+    snap = server._build_profile_snapshot(1)
+    assert snap["ready"] and snap["view"] == "profile" and snap["mode"] == "live"
+    assert snap["profile"]["stats"]["volume"] == 195 and snap["profile"]["rows"][0]["letters"] == "A"
+    run(server._activate_contract(contract("NIFTY29OCT26FUT", token="222")))
+    assert server.STATE["engine"].profile is not profile and server.STATE["engine"].profile.trades == 0
+    assert server._build_profile_snapshot(5)["profile"] == {"date": None, "rows": [], "empty": True}
+
+
 def test_on_tick_without_a_store_configured_does_not_crash():
     run(server._activate_contract(contract()))
     server.STATE["observation_store"] = None

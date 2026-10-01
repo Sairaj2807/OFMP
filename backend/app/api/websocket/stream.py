@@ -4,11 +4,13 @@ Protocol (JSON text frames):
 
   client -> server
     {"action": "auth", "token": "<access token>"}      only if no ofmp_access cookie; first message, within 5 s
-    {"action": "subscribe", "id": "c1", "streams": ["chart"], "ppr": 1, "interval": 60, "contract": "NIFTY27OCT26FUT"}
+    {"action": "subscribe", "id": "c1", "streams": ["chart"], "ppr": 1, "interval": 60, "contract": "NIFTY27OCT26FUT",
+     "view": "footprint" | "profile", "row": 5}
+                                          view "profile": a market profile at `row` points per row (ROW_SIZES)
     {"action": "unsubscribe", "id": "c1"}         (no id: drop every subscription)
     {"action": "pong"}  /  {"action": "ping"}
     {"action": "replay", "id": "c1", "date": "2026-09-29", "ppr": 1, "interval": 60, "speed": 10,
-     "autoplay": true, "at_ms": null}          replay a stored session on this chart id
+     "autoplay": true, "at_ms": null, "view": "footprint", "row": 5}   replay a stored session on this chart id
     {"action": "replay_control", "id": "c1", "command": "play" | "pause" | "speed" | "seek" | "step",
      "value": <speed or epoch ms>, "unit": "trade" | "candle"}
 
@@ -22,6 +24,7 @@ Protocol (JSON text frames):
     alert         one of the user's alert rules fired (data = the alert event); sent to every
                   open connection of that user, no subscription needed
   Replay snapshots carry data.replay = {date, start_ms, end_ms, cursor_ms, index, total, playing, speed, speeds}.
+  Profile snapshots (view "profile") carry data.view = "profile" and data.profile (see domain/profile).
 
 Guarantees and limits:
   - Origin must match the Host (or be an allowed CORS origin): blocks cross-site WebSocket hijacking.
@@ -48,6 +51,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from backend.app.core import metrics
 from backend.app.core.permissions import has_permission
+from backend.app.domain.profile import DEFAULT_ROW, ROW_SIZES
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +77,9 @@ class AuthMsg(_Msg):
     token: str = Field(min_length=10, max_length=2048)
 
 
+View = Literal["footprint", "profile"]
+
+
 class SubscribeMsg(_Msg):
     action: Literal["subscribe"]
     id: str = Field("default", pattern=SUB_ID_PATTERN)
@@ -80,6 +87,8 @@ class SubscribeMsg(_Msg):
     ppr: int = Field(1, ge=1, le=5)
     interval: int = 60
     contract: Optional[str] = Field(None, max_length=64)
+    view: View = "footprint"
+    row: int = DEFAULT_ROW
 
 
 class UnsubscribeMsg(_Msg):
@@ -100,6 +109,8 @@ class ReplayMsg(_Msg):
     speed: int = 10
     autoplay: bool = True
     at_ms: Optional[int] = Field(None, ge=0)
+    view: View = "footprint"
+    row: int = DEFAULT_ROW
 
 
 class ReplayControlMsg(_Msg):
@@ -111,6 +122,11 @@ class ReplayControlMsg(_Msg):
 
 
 ClientMessage = TypeAdapter(Union[AuthMsg, SubscribeMsg, UnsubscribeMsg, PingMsg, ReplayMsg, ReplayControlMsg])
+
+
+def view_key(msg) -> tuple:
+    """What a subscription's snapshot depends on: ("footprint", ppr, interval) or ("profile", row)."""
+    return ("profile", msg.row) if msg.view == "profile" else ("footprint", msg.ppr, msg.interval)
 
 
 def _now_ms() -> int:
@@ -129,8 +145,8 @@ def encode(payload) -> Encoded:
 class StreamConnection:
     def __init__(self, ws: WebSocket, user, token: str):
         self.ws, self.user, self.token = ws, user, token
-        self.subscriptions: dict = {}      # live: id -> (ppr, interval)
-        self.replays: dict = {}            # replay: id -> {"session": ReplaySession, "ppr": .., "interval": ..}
+        self.subscriptions: dict = {}      # live: id -> settings key, see view_key()
+        self.replays: dict = {}            # replay: id -> {"session": ReplaySession, "key": settings key}
         self.seq = 0
         self.last_seen = time.monotonic()
         self.snapshots_coalesced = 0
@@ -281,6 +297,9 @@ class StreamHub:
             await conn.send("error", {"code": "INVALID_INTERVAL",
                                       "message": f"interval must be one of {list(self.allowed_intervals)}"}, msg.id)
             return
+        if msg.view == "profile" and msg.row not in ROW_SIZES:
+            await conn.send("error", {"code": "INVALID_ROW", "message": f"row must be one of {list(ROW_SIZES)}"}, msg.id)
+            return
         if msg.id not in conn.ids() and len(conn.ids()) >= MAX_SUBSCRIPTIONS:
             await conn.send("error", {"code": "TOO_MANY_SUBSCRIPTIONS",
                                       "message": f"at most {MAX_SUBSCRIPTIONS} subscriptions per connection"}, msg.id)
@@ -291,10 +310,12 @@ class StreamHub:
                                       "message": "that contract is not streaming; subscribe to the active contract"}, msg.id)
             return
         conn.replays.pop(msg.id, None)                  # back to live
-        conn.subscriptions[msg.id] = (msg.ppr, msg.interval)
+        key = view_key(msg)
+        conn.subscriptions[msg.id] = key
         await conn.send("subscribed", {"streams": msg.streams, "ppr": msg.ppr, "interval": msg.interval,
+                                       "view": msg.view, "row": msg.row,
                                        "contract": active.get("tradingsymbol") if active else None}, msg.id)
-        conn.offer_snapshot(msg.id, self.gateway.chart_snapshot(msg.ppr, msg.interval))
+        conn.offer_snapshot(msg.id, self._live(key))
 
     # -- replay ---------------------------------------------------------------------------
 
@@ -304,10 +325,12 @@ class StreamHub:
             return await err("INVALID_INTERVAL", f"interval must be one of {list(self.allowed_intervals)}")
         if msg.speed not in REPLAY_SPEEDS:
             return await err("INVALID_SPEED", f"speed must be one of {list(REPLAY_SPEEDS)}")
+        if msg.view == "profile" and msg.row not in ROW_SIZES:
+            return await err("INVALID_ROW", f"row must be one of {list(ROW_SIZES)}")
         existing = conn.replays.get(msg.id)
         if existing and existing["session"].date == msg.date:   # same day: keep position, new settings
-            existing.update(ppr=msg.ppr, interval=msg.interval)
-            conn.offer_snapshot(msg.id, self.gateway.replay_snapshot(existing["session"], msg.ppr, msg.interval))
+            existing["key"] = view_key(msg)
+            conn.offer_snapshot(msg.id, self._replay(existing))
             return
         if msg.id not in conn.ids() and len(conn.ids()) >= MAX_SUBSCRIPTIONS:
             return await err("TOO_MANY_SUBSCRIPTIONS", f"at most {MAX_SUBSCRIPTIONS} subscriptions per connection")
@@ -323,9 +346,9 @@ class StreamHub:
         if msg.autoplay:
             session.play()
         conn.subscriptions.pop(msg.id, None)            # this id now replays
-        conn.replays[msg.id] = {"session": session, "ppr": msg.ppr, "interval": msg.interval}
+        entry = conn.replays[msg.id] = {"session": session, "key": view_key(msg)}
         await conn.send("replay_started", session.meta(), msg.id)
-        conn.offer_snapshot(msg.id, self.gateway.replay_snapshot(session, msg.ppr, msg.interval))
+        conn.offer_snapshot(msg.id, self._replay(entry))
 
     async def _control_replay(self, conn: StreamConnection, msg: ReplayControlMsg) -> None:
         entry = conn.replays.get(msg.id)
@@ -349,7 +372,18 @@ class StreamHub:
         except ValueError as e:
             await conn.send("error", {"code": "INVALID_CONTROL", "message": str(e)}, msg.id)
             return
-        conn.offer_snapshot(msg.id, self.gateway.replay_snapshot(session, entry["ppr"], entry["interval"]))
+        conn.offer_snapshot(msg.id, self._replay(entry))
+
+    # -- snapshots -------------------------------------------------------------------------
+
+    def _live(self, key: tuple) -> dict:
+        return self.gateway.profile_snapshot(key[1]) if key[0] == "profile" else self.gateway.chart_snapshot(*key[1:])
+
+    def _replay(self, entry: dict) -> dict:
+        key, session = entry["key"], entry["session"]
+        if key[0] == "profile":
+            return self.gateway.replay_profile_snapshot(session, key[1])
+        return self.gateway.replay_snapshot(session, *key[1:])
 
     # -- user notifications -----------------------------------------------------------------
 
@@ -369,19 +403,19 @@ class StreamHub:
 
     def push_once(self) -> None:
         """Build each distinct subscription's snapshot once and offer it to its subscribers."""
-        cache = {}      # (ppr, interval) -> snapshot, built and JSON-encoded once per push
+        cache = {}      # settings key -> snapshot, built and JSON-encoded once per push
         metrics.WS_SUBSCRIPTIONS.set(sum(len(c.ids()) for c in self.connections))
         for conn in list(self.connections):
-            for sub_id, settings in list(conn.subscriptions.items()):
-                if settings not in cache:
-                    cache[settings] = encode(self.gateway.chart_snapshot(*settings))
-                conn.offer_snapshot(sub_id, cache[settings])
+            for sub_id, key in list(conn.subscriptions.items()):
+                if key not in cache:
+                    cache[key] = encode(self._live(key))
+                conn.offer_snapshot(sub_id, cache[key])
             for sub_id, entry in list(conn.replays.items()):
                 session = entry["session"]
                 was_playing = session.playing
                 session.advance()
                 if was_playing or session.playing:      # paused replays only change on a control message
-                    conn.offer_snapshot(sub_id, self.gateway.replay_snapshot(session, entry["ppr"], entry["interval"]))
+                    conn.offer_snapshot(sub_id, self._replay(entry))
 
     async def heartbeat_once(self) -> None:
         now = time.monotonic()

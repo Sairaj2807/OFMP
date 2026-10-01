@@ -41,6 +41,9 @@ export interface StreamOptions {
 
 const OPEN = 1;
 
+/** The view fields of a subscribe/replay message (omitted for footprints: the server default). */
+const viewFields = (s: ChartSettings) => (s.view === "profile" ? { view: "profile", row: s.row ?? 5 } : {});
+
 type Subscription =
   | ({ kind: "live"; contract?: string } & ChartSettings)
   | ({ kind: "replay"; date: string; speed: number; autoplay: boolean; cursorMs?: number } & ChartSettings);
@@ -119,12 +122,13 @@ export class StreamClient {
     if (s.kind === "replay") {
       // after a reconnect this resumes where the viewer was (cursorMs from the last snapshot)
       const msg: Record<string, unknown> = { action: "replay", id, date: s.date, ppr: s.ppr, interval: s.interval,
-                                            speed: s.speed, autoplay: s.autoplay };
+                                            speed: s.speed, autoplay: s.autoplay, ...viewFields(s) };
       if (s.cursorMs !== undefined) msg.at_ms = s.cursorMs;
       this.send(msg);
       return;
     }
-    const msg: Record<string, unknown> = { action: "subscribe", id, streams: ["chart"], ppr: s.ppr, interval: s.interval };
+    const msg: Record<string, unknown> = { action: "subscribe", id, streams: ["chart"], ppr: s.ppr, interval: s.interval,
+                                          ...viewFields(s) };
     if (s.contract) msg.contract = s.contract;
     this.send(msg);
   }
@@ -163,8 +167,9 @@ export class StreamClient {
         const sub = msg.id ? this.subscriptions.get(msg.id) : undefined;
         if (!sub || !msg.id) break;
         const snap = msg.data as ChartSnapshot;
-        // ignore a stale live snapshot racing a switch to replay, and vice versa
+        // ignore a stale snapshot racing a switch (live <-> replay, footprint <-> profile)
         if ((sub.kind === "replay") !== Boolean(snap.replay)) break;
+        if ((sub.view === "profile") !== (snap.view === "profile")) break;
         if (sub.kind === "replay" && snap.replay) {
           sub.cursorMs = snap.replay.cursor_ms;
           sub.autoplay = snap.replay.playing;

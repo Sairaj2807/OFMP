@@ -1066,3 +1066,50 @@ Done on 2026-10-01.
 - In-app alert fan-out across API processes (Redis pub/sub), needed before running more than one.
 - Image signing, off-site backup automation, replay across a mid-day contract switch.
 - Measure capacity on the production host (Linux, uvloop).
+
+## 24. Phase 10 status (market profile)
+
+Done on 2026-10-01. Owner decisions:
+- TPOs mark each period's high–low range (CBOT).
+- Rows default to 5 points, adjustable per chart.
+- The view switch is per chart.
+- Periods are 30 minutes, with A at 09:15.
+
+**Engine** (`domain/profile`, pure, incremental):
+- Each period stores its tick range, and volume is stored per tick (buy/sell). That is enough to derive
+  TPO rows at any row size when a snapshot is built.
+- Calculations: TPO POC and volume POC; value area for each (same rule as the footprint's); initial
+  balance and extensions; single prints and tails; HVN/LVN; session figures.
+- New sessions roll over automatically, keeping the previous session for its POC/VAH/VAL. Trades
+  outside the session are excluded.
+- Tests:
+  - the worked examples from the Market Profile notes (A/B/C letters; value area 24515–24530 at 70%
+    of 38 TPOs)
+  - parity with the footprint: buy, sell, volume and volume POC per row on the same trades
+  - volume is conserved and the ladder stays contiguous at every row size
+
+**Plumbing:**
+- Live: fed from `server._on_tick`, with one profile per active contract.
+- Restart: rebuilt from today's stored trades, plus the previous session from the database.
+- Replay: fed through `replay_engine.apply_record`, with a parity test at arbitrary seek positions.
+- Stream: `view`/`row` on `subscribe` and `replay`. Subscriptions are keyed by view, and the same row size
+  is built once per push.
+- History: `GET /api/v1/market/profile`.
+
+**Terminal:**
+- Left sidebar (the focused chart), the `M` key and command-palette entries.
+- Per-chart `view` and `profileRow` in the workspace (layout format v3, migrated from v2).
+- A canvas renderer: letters or blocks, value area, POC row, volume POC bar, IB bracket,
+  single prints/tails, buy/sell volume histogram, HVN/LVN, previous-session lines, price axis, hover
+  readout, scroll, and a figures strip.
+- The stream client drops snapshots of the other view during a switch.
+- Checked visually on a real recorded session (2026-09-29, 10,320 trades) at 5- and 2-point rows.
+
+**Verified:**
+- Backend tests pass with the database. Frontend: 31 unit tests.
+- 11 Playwright tests, including one chart in profile view while the other stays a footprint, row size,
+  persistence across reload, and the `M` toggle.
+- The browser tests now set each chart's view explicitly, since views are saved per user.
+
+**Still open:** composite (week/month) profiles, value/POC migration, day types, Market Profile alert
+rules, and printed-only TPO marking as an option.

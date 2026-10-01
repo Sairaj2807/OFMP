@@ -53,7 +53,8 @@ describe("config migration", () => {
     const out = migrateConfig(v1);
     expect([out.layout, out.activeChartId, out.units]).toEqual([4, "c3", "lots"]);
     expect(out.charts[0]).toMatchObject({ interval: 300, ppr: 2, cellStyle: "ladder", displayMode: "delta",
-                                          showPoc: false, mode: "live", replayDate: null });
+                                          showPoc: false, mode: "live", replayDate: null,
+                                          view: "footprint", profileRow: 5 });
     expect(out.charts).toHaveLength(4);                      // missing charts filled from defaults
   });
 
@@ -64,6 +65,9 @@ describe("config migration", () => {
     expect(out.units).toBe("qty");
     expect(out.charts[0]).toMatchObject({ ppr: 1, mode: "live", replayDate: null });
     expect(migrateConfig(null)).toEqual(initialTerminal);
+    const v3 = migrateConfig({ charts: [{ id: "c2", view: "profile", profileRow: 20 }, { id: "c3", view: "pie", profileRow: 7 }] });
+    expect(v3.charts.map((c) => [c.view, c.profileRow])).toEqual(
+      [["footprint", 5], ["profile", 20], ["footprint", 5], ["footprint", 5]]);   // per chart; junk repaired
     expect(migrateConfig("garbage")).toEqual(initialTerminal);
   });
 });

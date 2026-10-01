@@ -169,4 +169,20 @@ describe("StreamClient replay", () => {
     socket().emit({ type: "alert", data: { id: 5, message: "Breakout: price crosses above 24500" } });
     expect(alerts).toEqual([{ id: 5, message: "Breakout: price crosses above 24500" }]);
   });
+
+  it("sends the chart view and drops snapshots of the other view", () => {
+    const { client, socket, snapshots } = setup();
+    client.start();
+    socket().open();
+    client.subscribe("c1", { ppr: 1, interval: 60, view: "profile", row: 10 });
+    expect(socket().sent.at(-1)).toEqual({ action: "subscribe", id: "c1", streams: ["chart"], ppr: 1, interval: 60,
+                                           view: "profile", row: 10 });
+    socket().emit({ type: "snapshot", id: "c1", data: { ready: true } });                    // stale footprint
+    socket().emit({ type: "snapshot", id: "c1", data: { ready: true, view: "profile", profile: { rows: [] } } });
+    expect(snapshots).toHaveLength(1);
+    client.subscribe("c1", { ppr: 1, interval: 60, view: "footprint" });
+    expect(socket().sent.at(-1)).toEqual({ action: "subscribe", id: "c1", streams: ["chart"], ppr: 1, interval: 60 });
+    client.replay("c2", "2026-09-29", { ppr: 1, interval: 60, view: "profile", row: 5 });
+    expect(socket().sent.at(-1)).toMatchObject({ action: "replay", id: "c2", view: "profile", row: 5 });
+  });
 });

@@ -176,6 +176,13 @@ class FakeGateway:
         self.snapshots += 1
         return {"ppr": ppr, "interval": interval, "n": self.snapshots}
 
+    def profile_snapshot(self, row):
+        self.snapshots += 1
+        return {"view": "profile", "row": row, "n": self.snapshots}
+
+    async def session_profile(self, date, row):
+        return {"date": date, "row_size": row} if date == "2026-09-29" else None
+
 
 def user(role="user"):
     return AuthUser(uuid.UUID(int=1), "u@example.com", "U", role, True, uuid.UUID(int=2))
@@ -256,7 +263,7 @@ def test_push_builds_and_encodes_each_distinct_snapshot_once():
     hub = StreamHub(gw, authenticate=None, allowed_intervals=(60, 300))
     conns = [StreamConnection(ws=None, user=user(), token="t") for _ in range(3)]
     for c in conns:
-        c.subscriptions = {"a": (1, 60), "b": (1, 300)}
+        c.subscriptions = {"a": ("footprint", 1, 60), "b": ("footprint", 1, 300)}
     hub.connections = set(conns)
     hub.push_once()
     assert gw.snapshots == 2                                   # one build per distinct (ppr, interval)
@@ -408,6 +415,12 @@ class ReplayGateway(FakeGateway):
     def replay_snapshot(self, session, ppr, interval):
         return {"ready": True, "mode": "replay", "ppr": ppr, "interval": interval, "replay": session.meta()}
 
+    def replay_profile_snapshot(self, session, row):
+        from backend.app.domain.profile import build_profile
+        profile = build_profile(session.state.profile, row) or {"stats": {"tpo_total": 0}}
+        return {"ready": True, "mode": "replay", "view": "profile", "row": row, "replay": session.meta(),
+                "tpo_total": profile["stats"]["tpo_total"]}
+
 
 def next_of(ws, type_):
     while True:
@@ -459,6 +472,63 @@ def test_ws_replay_errors_and_limits():
         for sid in ("r1", "r2", "r3"):
             ws.send_json({"action": "replay", "id": sid, "date": "2026-09-29", "autoplay": False})
         assert next_of(ws, "error")["data"]["code"] == "TOO_MANY_REPLAYS"
+
+
+def collect(ws, done):
+    """Read messages until done(messages) is true; returns them all (nothing discarded)."""
+    got = []
+    while not done(got):
+        got.append(ws.receive_json())
+    return got
+
+
+def latest(msgs, type_, sub_id):
+    return [m for m in msgs if m["type"] == type_ and m.get("id") == sub_id][-1]
+
+
+def test_ws_profile_view_per_chart_live_and_replay():
+    app, _ = ws_app({"good-token-123": user()}, gateway=ReplayGateway())
+    hub = app.state.stream_hub
+    c = TestClient(app)
+    c.cookies.set("ofmp_access", "good-token-123")
+    has = lambda t, i: lambda ms: any(m["type"] == t and m.get("id") == i for m in ms)   # noqa: E731
+    with c.websocket_connect("/ws/v1/stream") as ws:
+        ws.receive_json()
+        ws.send_json({"action": "subscribe", "id": "c1", "streams": ["chart"], "interval": 60})
+        ws.send_json({"action": "subscribe", "id": "c2", "streams": ["chart"], "interval": 60, "view": "profile",
+                      "row": 10})
+        msgs = collect(ws, lambda ms: has("snapshot", "c1")(ms) and has("snapshot", "c2")(ms))
+        assert latest(msgs, "subscribed", "c2")["data"]["view"] == "profile"
+        assert latest(msgs, "subscribed", "c2")["data"]["row"] == 10
+        assert "view" not in latest(msgs, "snapshot", "c1")["data"]
+        assert latest(msgs, "snapshot", "c2")["data"]["view"] == "profile"
+        assert latest(msgs, "snapshot", "c2")["data"]["row"] == 10
+
+        ws.send_json({"action": "subscribe", "id": "c3", "streams": ["chart"], "view": "profile", "row": 7})
+        assert latest(collect(ws, has("error", "c3")), "error", "c3")["data"]["code"] == "INVALID_ROW"
+        # the same settings on two charts share one snapshot per push
+        ws.send_json({"action": "subscribe", "id": "c3", "streams": ["chart"], "view": "profile", "row": 10})
+        collect(ws, has("snapshot", "c3"))
+        conn = next(iter(hub.connections))
+        assert conn.subscriptions == {"c1": ("footprint", 1, 60), "c2": ("profile", 10), "c3": ("profile", 10)}
+        before = hub.gateway.snapshots
+        hub.push_once()
+        assert hub.gateway.snapshots - before == 2                  # one footprint build + one profile build
+
+        # replay in profile view; switching view on the same day keeps the position
+        ws.send_json({"action": "replay", "id": "c4", "date": "2026-09-29", "autoplay": False, "view": "profile",
+                      "row": 1})
+        collect(ws, has("snapshot", "c4"))
+        ws.send_json({"action": "replay_control", "id": "c4", "command": "seek", "value": REPLAY_RECORDS[5]["ts_ms"]})
+        at6 = lambda ms: any(m["type"] == "snapshot" and m.get("id") == "c4"   # noqa: E731
+                             and m["data"]["replay"]["index"] == 6 for m in ms)
+        snap = latest(collect(ws, at6), "snapshot", "c4")["data"]
+        assert snap["view"] == "profile" and snap["tpo_total"] > 0
+        ws.send_json({"action": "replay", "id": "c4", "date": "2026-09-29", "view": "footprint", "interval": 60})
+        foot = lambda ms: any(m["type"] == "snapshot" and m.get("id") == "c4"   # noqa: E731
+                              and "view" not in m["data"] for m in ms)
+        kept = latest(collect(ws, foot), "snapshot", "c4")["data"]
+        assert kept["replay"]["index"] == 6 and kept["interval"] == 60
 
 
 def test_replay_sessions_endpoint_requires_market_read():

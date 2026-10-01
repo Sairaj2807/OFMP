@@ -85,6 +85,8 @@ test("terminal streams live data and draws the footprint", async ({ page }) => {
   // layouts are saved per user on the server: set the state this test relies on
   await page.getByRole("button", { name: "1 chart" }).click();
   await page.getByRole("region", { name: "Chart c1" }).getByRole("button", { name: "Live", exact: true }).click();
+  await page.getByRole("region", { name: "Chart c1" }).click();
+  await page.getByRole("button", { name: "Order-flow footprint on chart c1" }).click();
 
   await expect(page.getByRole("status").filter({ hasText: "Live" })).toBeVisible({ timeout: 10_000 });
   await expect(page.getByLabel("Active contract")).not.toHaveText("—");
@@ -101,15 +103,19 @@ test("layouts, interval changes and the command palette", async ({ page }) => {
   await openTerminal(page);
   await page.getByRole("button", { name: "1 chart" }).click();
   await page.getByRole("region", { name: "Chart c1" }).getByRole("button", { name: "Live", exact: true }).click();
+  await page.getByRole("region", { name: "Chart c1" }).click();
+  await page.getByRole("button", { name: "Order-flow footprint on chart c1" }).click();
   await expect(page.getByText("Waiting for the first trade…")).toBeHidden({ timeout: 15_000 });
 
   await page.getByRole("button", { name: "4 charts" }).click();
-  await expect(page.locator('[data-testid^="chart-c"]')).toHaveCount(4);
-  for (const id of ["c1", "c2", "c3", "c4"]) {
-    await expect(page.getByTestId(`chart-${id}`).locator("canvas").first()).toBeVisible();
+  await expect(page.locator('section[aria-label^="Chart c"]')).toHaveCount(4);
+  for (const id of ["c1", "c2", "c3", "c4"]) {        // footprint or market profile: each draws on a canvas
+    await expect(page.getByRole("region", { name: `Chart ${id}` }).locator("canvas").first()).toBeVisible();
   }
 
   const chart2 = page.getByRole("region", { name: "Chart c2" });
+  await chart2.click();                                    // focus c2 and make sure it is a footprint
+  await page.getByRole("button", { name: "Order-flow footprint on chart c2" }).click();
   await chart2.getByRole("button", { name: "15m" }).click();
   await expect(chart2.getByRole("button", { name: "15m" })).toHaveAttribute("aria-pressed", "true");
 
@@ -120,13 +126,13 @@ test("layouts, interval changes and the command palette", async ({ page }) => {
   await expect(palette.getByRole("option")).toHaveCount(1);
   await page.keyboard.press("Enter");
   await expect(palette).toBeHidden();
-  await expect(page.locator('[data-testid^="chart-c"]')).toHaveCount(1);
+  await expect(page.locator('section[aria-label^="Chart c"]')).toHaveCount(1);
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/terminal-after-palette.png` });
 
   // settings persist across a reload
   await page.getByRole("button", { name: "2 charts" }).click();
   await page.reload();
-  await expect(page.locator('[data-testid^="chart-c"]')).toHaveCount(2);
+  await expect(page.locator('section[aria-label^="Chart c"]')).toHaveCount(2);
 });
 
 test("replay a recorded session: play, step and back to live", async ({ page }) => {
@@ -137,6 +143,8 @@ test("replay a recorded session: play, step and back to live", async ({ page }) 
   await openTerminal(page);
   await page.getByRole("button", { name: "1 chart" }).click();
   const chart = page.getByRole("region", { name: "Chart c1" });
+  await chart.click();
+  await page.getByRole("button", { name: "Order-flow footprint on chart c1" }).click();
   await chart.getByRole("button", { name: "Replay", exact: true }).click();
   const bar = chart.getByRole("group", { name: "Replay controls c1" });
   await expect(bar).toBeVisible();
@@ -180,7 +188,7 @@ test("workspaces: save as, autosave, persisted on the server, delete", async ({ 
   await page.evaluate(() => localStorage.clear());
   await page.reload();
   await expect(page.getByRole("button", { name: /Workspace/ })).toContainText(name);
-  await expect(page.locator('[data-testid^="chart-c"]')).toHaveCount(4);
+  await expect(page.locator('section[aria-label^="Chart c"]')).toHaveCount(4);
 
   await page.getByRole("button", { name: /Workspace/ }).click();
   await page.getByRole("menuitem", { name: "Delete this workspace" }).click();
@@ -201,6 +209,8 @@ test("alerts: a price rule fires on live data, shows a toast and history, then i
   await openTerminal(page);
   await page.getByRole("button", { name: "1 chart" }).click();
   await page.getByRole("region", { name: "Chart c1" }).getByRole("button", { name: "Live", exact: true }).click();
+  await page.getByRole("region", { name: "Chart c1" }).click();
+  await page.getByRole("button", { name: "Order-flow footprint on chart c1" }).click();
   await expect(page.getByText("Waiting for the first trade…")).toBeHidden({ timeout: 15_000 });
 
   await page.getByRole("button", { name: /^Alerts/ }).click();
@@ -238,4 +248,47 @@ test("alerts: a price rule fires on live data, shows a toast and history, then i
   await panel.getByRole("tab", { name: "rules" }).click();
   await panel.getByRole("button", { name: `Delete ${name}` }).click();
   await expect(panel.getByRole("listitem", { name: `Rule ${name}` })).toBeHidden();
+});
+
+test("market profile: sidebar switches one chart, the other stays a footprint", async ({ page }) => {
+  await openTerminal(page);
+  await page.getByRole("button", { name: "2 charts" }).click();
+  for (const id of ["c1", "c2"]) {
+    const chart = page.getByRole("region", { name: `Chart ${id}` });
+    await chart.getByRole("button", { name: "Live", exact: true }).click();
+  }
+  // c1 stays a footprint (set explicitly: layouts are saved per user)
+  await page.getByRole("region", { name: "Chart c1" }).click();
+  await page.getByRole("button", { name: "Order-flow footprint on chart c1" }).click();
+
+  // focus c2, switch it from the sidebar
+  await page.getByRole("region", { name: "Chart c2" }).click();
+  await page.getByRole("button", { name: "Market profile on chart c2" }).click();
+  await expect(page.getByRole("button", { name: "Market profile on chart c2" })).toHaveAttribute("aria-pressed", "true");
+  const c2 = page.getByRole("region", { name: "Chart c2" });
+  await expect(c2.getByLabel("Chart type")).toHaveText("Profile");
+  await expect(page.getByTestId("profile-c2")).toBeVisible();
+  await expect(page.getByTestId("chart-c1").locator("canvas").first()).toBeVisible();     // c1: still a footprint
+  await expect(page.getByTestId("profile-c1")).toHaveCount(0);
+
+  const figures = page.getByLabel("Market profile figures c2");
+  await expect(figures).toContainText("POC", { timeout: 15_000 });
+  await expect(figures).toContainText("VAH");
+  await expect(figures).toContainText("TPOs");
+  await c2.getByLabel("Profile row size").selectOption("10");
+  await expect(c2.getByLabel("Profile row size")).toHaveValue("10");
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/market-profile.png` });
+
+  // saved with the workspace: survives a reload
+  await expect(page.getByRole("button", { name: /Workspace/ })).toContainText("Saved", { timeout: 5_000 });
+  await page.reload();
+  await expect(page.getByRole("button", { name: /Workspace/ })).toContainText(/Saved|Saving/);   // server copy applied
+  await expect(page.getByTestId("profile-c2")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Chart c2" }).getByLabel("Profile row size")).toHaveValue("10");
+
+  // keyboard: M toggles the focused chart back to a footprint
+  await page.getByRole("region", { name: "Chart c2" }).click();
+  await page.keyboard.press("m");
+  await expect(page.getByTestId("profile-c2")).toHaveCount(0);
+  await expect(page.getByTestId("chart-c2").locator("canvas").first()).toBeVisible();
 });

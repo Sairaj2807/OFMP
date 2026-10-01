@@ -167,13 +167,17 @@ def test_restored_engine_matches_the_live_engine():
 
 def test_server_restore_session_uses_todays_trades(monkeypatch):
     async def go(engine):
-        now_ms = 1_790_653_500_000
+        now_ms = 1_790_655_000_000                         # 2026-09-29 09:40 IST
         monkeypatch.setattr(server.time, "time", lambda: now_ms / 1000)
         w = MarketDataWriter(engine)
         for i, side in enumerate(("BUY", "SELL", "BUY"), start=1):
             w.record_trade({"trade_id": i, "ts_ms": now_ms - 60_000 + i * 1000, "ltp": 100.0 + i / 10, "qty": 65,
                             "algo_side": side, "symbol": "NIFTYTEST", "bid_levels": [[100.0, 65, 1]],
                             "ask_levels": [[100.5, 65, 1]]}, provider="angelone", token="9")
+        yesterday_ms = now_ms - 86_400_000                 # the previous session: reference levels
+        for i in range(1, 4):
+            w.record_trade({"trade_id": i, "ts_ms": yesterday_ms + i * 1000, "ltp": 90.0, "qty": 65,
+                            "algo_side": "SELL", "symbol": "NIFTYTEST"}, provider="angelone", token="9")
         await w.flush()
         monkeypatch.setitem(server.STATE, "db_engine", engine)
         eng = TickProcessorState(0.1)
@@ -185,6 +189,8 @@ def test_server_restore_session_uses_todays_trades(monkeypatch):
         return n, eng, inst
     n, eng, inst = run(with_engine(go))
     assert n == 3 and eng.last_side == "BUY" and eng.book.best_ask()[0] == 100.5
+    assert eng.profile.trades == 3 and eng.profile.date == "2026-09-29"         # today's market profile
+    assert eng.profile.previous.date == "2026-09-28" and eng.profile.previous.trades == 3
     assert [(s, str(e), l) for s, e, l in inst] == [("NIFTYTEST", "2026-10-27", 65)]
 
 

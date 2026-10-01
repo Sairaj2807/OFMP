@@ -3,11 +3,12 @@
 import { useCallback } from "react";
 
 import { FootprintChart } from "@/components/chart/FootprintChart";
+import { MarketProfileChart } from "@/components/chart/MarketProfileChart";
 import { Button, Select } from "@/components/ui/controls";
 import { type ChartStats, useLiveStats } from "@/hooks/useLiveStream";
 import { intervalLabel } from "@/lib/format";
 import { useSession } from "@/stores/session";
-import { type CellStyle, type ChartConfig, type DisplayMode, useTerminal } from "@/stores/terminal";
+import { type CellStyle, type ChartConfig, type DisplayMode, PROFILE_ROWS, useTerminal } from "@/stores/terminal";
 import { ReplayBar, loadReplaySessions } from "./ReplayBar";
 
 export function ChartPanel({ config }: { config: ChartConfig }) {
@@ -43,38 +44,59 @@ export function ChartPanel({ config }: { config: ChartConfig }) {
           <Button active={config.mode === "replay"} onClick={toReplay}>Replay</Button>
         </div>
         <span className="mx-1 h-4 w-px bg-line" aria-hidden />
-        <div className="flex items-center gap-0.5" role="group" aria-label="Interval">
-          {intervals.map((sec) => (
-            <Button key={sec} active={config.interval === sec} onClick={() => update(config.id, { interval: sec })}>
-              {intervalLabel(sec)}
-            </Button>
-          ))}
-        </div>
-        <span className="mx-1 h-4 w-px bg-line" aria-hidden />
-        <Select label="Price per row" value={config.ppr} onChange={(e) => update(config.id, { ppr: Number(e.target.value) })}>
-          {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n} ₹/row</option>)}
-        </Select>
-        <Select label="Cell style" value={config.cellStyle}
-                onChange={(e) => update(config.id, { cellStyle: e.target.value as CellStyle })}>
-          <option value="profile">Profile</option>
-          <option value="ladder">Ladder</option>
-          <option value="heatmap">Heatmap</option>
-        </Select>
-        <Select label="Values" value={config.displayMode}
-                onChange={(e) => update(config.id, { displayMode: e.target.value as DisplayMode })}>
-          <option value="bidask">Sell × Buy</option>
-          <option value="delta">Delta</option>
-          <option value="volume">Volume</option>
-        </Select>
-        <span className="mx-1 h-4 w-px bg-line" aria-hidden />
-        <Button active={config.showPoc} onClick={() => update(config.id, { showPoc: !config.showPoc })}>POC</Button>
-        <Button active={config.showValueArea} onClick={() => update(config.id, { showValueArea: !config.showValueArea })}>VA</Button>
-        <Button active={config.showImbalances} onClick={() => update(config.id, { showImbalances: !config.showImbalances })}
-                title="Stacked imbalances (engine rule v1, ratio 3)">Imb</Button>
+        <span className="px-1 text-[11px] uppercase tracking-wide text-muted" aria-label="Chart type">
+          {config.view === "profile" ? "Profile" : "Footprint"}
+        </span>
+        {config.view === "profile" ? (
+          <>
+            <Select label="Profile row size" value={config.profileRow}
+                    onChange={(e) => update(config.id, { profileRow: Number(e.target.value) })}>
+              {PROFILE_ROWS.map((n) => <option key={n} value={n}>{n} pt/row</option>)}
+            </Select>
+            <Button active={config.showPoc} onClick={() => update(config.id, { showPoc: !config.showPoc })}
+                    title="TPO and volume points of control">POC</Button>
+            <Button active={config.showValueArea} onClick={() => update(config.id, { showValueArea: !config.showValueArea })}
+                    title="Value area (70% of TPOs)">VA</Button>
+          </>
+        ) : (
+          <>
+            <div className="flex items-center gap-0.5" role="group" aria-label="Interval">
+              {intervals.map((sec) => (
+                <Button key={sec} active={config.interval === sec} onClick={() => update(config.id, { interval: sec })}>
+                  {intervalLabel(sec)}
+                </Button>
+              ))}
+            </div>
+            <span className="mx-1 h-4 w-px bg-line" aria-hidden />
+            <Select label="Price per row" value={config.ppr} onChange={(e) => update(config.id, { ppr: Number(e.target.value) })}>
+              {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n} ₹/row</option>)}
+            </Select>
+            <Select label="Cell style" value={config.cellStyle}
+                    onChange={(e) => update(config.id, { cellStyle: e.target.value as CellStyle })}>
+              <option value="profile">Profile</option>
+              <option value="ladder">Ladder</option>
+              <option value="heatmap">Heatmap</option>
+            </Select>
+            <Select label="Values" value={config.displayMode}
+                    onChange={(e) => update(config.id, { displayMode: e.target.value as DisplayMode })}>
+              <option value="bidask">Sell × Buy</option>
+              <option value="delta">Delta</option>
+              <option value="volume">Volume</option>
+            </Select>
+            <span className="mx-1 h-4 w-px bg-line" aria-hidden />
+            <Button active={config.showPoc} onClick={() => update(config.id, { showPoc: !config.showPoc })}>POC</Button>
+            <Button active={config.showValueArea} onClick={() => update(config.id, { showValueArea: !config.showValueArea })}>VA</Button>
+            <Button active={config.showImbalances} onClick={() => update(config.id, { showImbalances: !config.showImbalances })}
+                    title="Stacked imbalances (engine rule v1, ratio 3)">Imb</Button>
+          </>
+        )}
       </div>
       {config.mode === "replay" && <ReplayBar config={config} />}
       <div className="min-h-0 flex-1">
-        <FootprintChart config={config} units={units} lotSize={lotSize} tickSize={tickSize} onStats={onStats} />
+        {config.view === "profile"
+          ? <MarketProfileChart key="profile" config={config} units={units} lotSize={lotSize} />
+          : <FootprintChart key="footprint" config={config} units={units} lotSize={lotSize} tickSize={tickSize}
+                            onStats={onStats} />}
       </div>
     </section>
   );

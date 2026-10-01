@@ -113,6 +113,21 @@ closed (history and webhooks).
 - **Contracts.** An admin (`admin.system`) sees **Make live** on the other contracts in the watchlist.
   It switches the live feed for every user (after a confirmation) and is audited.
 
+## Market profile
+
+The left sidebar switches the **focused** chart between **Order-flow footprint** and **Market profile**.
+Each chart keeps its own view and its own profile row size (1–50 points, default 5), both saved with the
+workspace.
+
+The profile chart draws:
+- TPO letters per 30-minute period (blocks when rows are small), value area, POC (highlighted row) and
+  volume POC (outlined bar);
+- the initial balance, single prints and tails;
+- volume at price split into buy and sell;
+- the previous session's POC, VAH and VAL.
+
+It works live and in replay. Definitions are in `docs/market-profile.md`.
+
 ## Keyboard
 
 | Key | Action |
@@ -120,3 +135,4 @@ closed (history and webhooks).
 | `Ctrl/Cmd + K` | command palette |
 | `1`–`5` | interval of the focused chart |
 | `P` / `V` / `I` | toggle POC / value area / stacked imbalances |
+| `M` | focused chart: footprint ↔ market profile |
