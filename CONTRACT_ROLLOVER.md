@@ -5,9 +5,10 @@
 Fixes the recurring "no NIFTY FUTIDX contract found expiring in SEP" crash: the server used
 to require an exact expiry-month match (`config.INSTRUMENT_EXPIRY_MONTH`), which goes stale the
 moment that month's contract rolls off the scrip master. Now it always resolves "whichever
-contract hasn't expired yet and expires soonest" — a question that's never stale — and a
-dropdown on `/` and `/chart` (live mode only) lets you switch to a different upcoming expiry
-without restarting the server.
+contract hasn't expired yet and expires soonest" — a question that's never stale. An admin
+(`admin.system`) can switch to a different upcoming expiry without restarting the server, with
+**Make live** in the terminal's watchlist (`POST /api/v1/admin/contract`). The `/` and `/chart`
+dropdown described in older notes was retired with those pages in Phase 9.
 
 ## Auto-roll
 

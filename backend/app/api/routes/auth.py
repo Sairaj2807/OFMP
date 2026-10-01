@@ -37,7 +37,7 @@ async def login(body: LoginRequest, request: Request, response: Response,
                 svc: AuthService = Depends(get_auth_service)):
     limiter = request.app.state.limiters.get("login_email")
     if limiter is not None:                          # slows guessing against one account from many IPs
-        limiter.check(f"login_email:{body.email.strip().lower()}")
+        await limiter.check(f"login_email:{body.email.strip().lower()}")
     pair = await svc.login(body.email, body.password, request_info(request))
     set_auth_cookies(response, pair, _secure(request))
     return _login_out(pair)

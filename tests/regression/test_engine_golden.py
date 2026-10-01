@@ -16,6 +16,7 @@ import pytest
 
 import replay_engine
 import server
+from backend.app.domain.orderflow.table import candle_table
 from helpers import TICK, synthetic_ticks
 import orderbook_engine as oe
 
@@ -77,7 +78,7 @@ def engine_outputs(seed):
         for interval in (60, 300, 1800):
             payloads[f"chart_{ppr}_{interval}"] = server._chart_payload(
                 fp, eng.cvd_tracker.cvd, eng.last_candle_seen, ppr, interval_sec=interval, limit=10_000)
-            payloads[f"table_{ppr}_{interval}"] = server._candles_payload(
+            payloads[f"table_{ppr}_{interval}"] = candle_table(
                 fp, eng.cvd_by_candle, ppr, interval_sec=interval, limit=10_000)
 
     for i, o in enumerate(observations):

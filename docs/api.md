@@ -3,9 +3,15 @@
 Interactive documentation: `/api/docs` (disabled when `ENVIRONMENT=production`). Schema:
 `/api/openapi.json`.
 
-The legacy endpoints (`/api/status`, `/api/contracts`, `/api/contract`, `/api/replay/*`, `/ws/frontend`,
-`/ws/chart`) and pages (`/`, `/chart`, `/replay`) are unchanged. They sit behind login only when
-`AUTH_REQUIRED=1`.
+Everything is under `/api/v1` and `/ws/v1/stream`.
+
+The legacy pages and endpoints were retired in Phase 9:
+- `/`, `/chart`, `/replay` and `/login` now redirect (308) to the terminal at `/app/`.
+- `/reset-password` and `/verify-email` redirect to their `/app/` pages, keeping the `token`, so links in
+  older emails still work.
+- `/api/status`, `/api/contracts`, `/api/contract`, `/api/replay/*`, `/ws/frontend` and `/ws/chart` are
+  gone (404). Use `/api/v1/market/status`, `/api/v1/market/contracts`, `POST /api/v1/admin/contract`,
+  and replay over `/ws/v1/stream`.
 
 ## Conventions
 
@@ -86,8 +92,7 @@ The password is prompted for, or read from the env var named by `--password-env`
 | `admin` | support + `admin.system` |
 | `super_admin` | all |
 
-Checked server-side on every route (`require_permission`). With `AUTH_REQUIRED=1`, switching the global
-live contract (`POST /api/contract`) needs `admin.system`.
+Checked server-side on every route (`require_permission`).
 
 ## Platform endpoints
 
@@ -96,10 +101,11 @@ live contract (`POST /api/contract`) needs `admin.system`.
 | GET | `/live` | — | process alive |
 | GET | `/ready` | — | 503 only if a configured database is unreachable. A disconnected feed (e.g. market closed) does not make the API unready. |
 | GET | `/health` | — | summary |
-| GET | `/api/v1/market/status` | `market.read` | active contract + feed health |
+| GET | `/api/v1/market/status` | `market.read` | active contract, feed health, and `session` (NSE calendar: `open`, today's `session`, `holiday`, `next_open`, `calendar_covers_today`) |
 | GET | `/api/v1/market/contracts` | `market.read` | switchable contracts |
 | GET | `/api/v1/admin/users` | `admin.users` | cursor-paginated by email |
 | GET | `/api/v1/admin/system` | `admin.system` | feed, database writer, WebSocket stats |
+| POST | `/api/v1/admin/contract` | `admin.system` | `{token}` from `/market/contracts`: switch the live feed (resets the live footprint; audited as `contract.switch`); `422 UNKNOWN_CONTRACT` otherwise |
 
 ## Workspaces
 

@@ -49,22 +49,17 @@ Each trade's display includes a **"Next Trade"** line — the gap in seconds to 
 price/side — so you know exactly how far to advance Vtrender's replay before looking for the next
 match, instead of hunting for it by eye.
 
-### 2. `/replay` — visual footprint replay
+### 2. Visual footprint replay in the terminal
 
-The live dashboard ([server.py](server.py), `/`) has a sibling view at `/replay`
-([static/replay.html](static/replay.html)) that reconstructs the **whole footprint chart** — not just
-one trade — from a saved session, via [replay_engine.py](replay_engine.py). Pick a session date, then
-scrub/play/step through it next to Vtrender's own Orderflow Replay for the same date, comparing whole
-candles (delta, POC, value area, imbalance stacks) at a glance instead of confirming one print at a
-time. Drop into `review_cli.py --date <date>` for the specific candles that visibly disagree.
+Switch any chart in the terminal (`/app/`) to **Replay**. It reconstructs the **whole footprint chart**
+— not just one trade — from a saved session, server-side, with the same aggregation code as live
+([replay_engine.py](replay_engine.py) `apply_record`). Pick a session date, then play (1–50×), seek, or
+step one trade or one candle at a time, next to Vtrender's own Orderflow Replay for the same date.
+Compare whole candles (delta, POC, value area, imbalance stacks) at a glance instead of confirming one
+print at a time. Drop into `review_cli.py --date <date>` for the specific candles that visibly disagree.
 
-Backing endpoints (all read-only, never touch the live engine):
-
-- `GET /api/replay/sessions` — dates with at least one logged trade
-- `GET /api/replay/<date>/meta` — time range, trade count, tick size
-- `GET /api/replay/<date>/snapshot?as_of_ms=<ms>&ppr=<1-5>` — footprint/book state as of that instant,
-  in the same shape the live `/ws/frontend` feed uses (`_candles_payload` in [server.py](server.py) is
-  shared by both)
+The replay protocol is documented in [docs/api.md](docs/api.md) ("Replay over the stream"). The
+retired `/replay` page and its `/api/replay/*` endpoints are gone.
 
 ## Time-sync anchor
 
@@ -98,8 +93,8 @@ Replay reads either saved schema: `observations.jsonl` (Angel, one classified tr
 reported no trades. Arrow records carry no `algo_side`, so the trade card shows the feed's side
 ("BUY", "SELL", or "BUY+SELL" for a coalesced update).
 
-The same sessions can be scrubbed on the order-flow chart at `/chart?mode=replay`
-(see [ORDERFLOW_CHART.md](ORDERFLOW_CHART.md)); its jump-to-time box takes IST.
+(Historical: the `/chart?mode=replay` page mentioned in older notes was retired; replay is in the
+terminal.)
 
 ## Labels stay day-scoped, export combines everything
 

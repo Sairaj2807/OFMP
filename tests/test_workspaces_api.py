@@ -53,7 +53,7 @@ def client():
                      "email_tokens, audit_logs, workspaces CASCADE"))
     app = FastAPI()
     configure_api(app, environment="development", cookie_secure=False, cors_origins=[],
-                  max_request_bytes=200_000, legacy_auth_required=False)
+                  max_request_bytes=200_000)
     engine = create_engine(TEST_DATABASE_URL)
     svc = AuthService(engine, "ws-test-secret-" + "q" * 32, MemoryEmailSender(), "http://testserver")
     app.state.auth_service, app.state.db_engine = svc, engine

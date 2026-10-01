@@ -1,6 +1,8 @@
 """API layer without a database: security primitives, permissions, rate
-limiting, error envelope, request ids, body limits, health, the legacy auth
-guard, and the /ws/v1/stream gateway (with a fake authenticator)."""
+limiting, error envelope, request ids, body limits, health, and the
+/ws/v1/stream gateway (with a fake authenticator)."""
+import asyncio
+import json
 import time
 import uuid
 
@@ -11,7 +13,7 @@ from pydantic import BaseModel
 from starlette.websockets import WebSocketDisconnect
 
 from backend.app.api.app import configure_api
-from backend.app.api.websocket.stream import StreamConnection, StreamHub
+from backend.app.api.websocket.stream import Encoded, StreamConnection, StreamHub, encode
 from backend.app.core.errors import AppError
 from backend.app.core.permissions import ROLE_PERMISSIONS, has_permission
 from backend.app.core.ratelimit import SlidingWindowLimiter
@@ -80,15 +82,15 @@ def test_role_permissions_are_cumulative():
 def test_sliding_window_limiter():
     now = [0.0]
     lim = SlidingWindowLimiter(3, 10, clock=lambda: now[0])
-    assert [lim.hit("k")[0] for _ in range(4)] == [True, True, True, False]
-    assert lim.hit("other")[0]                                    # keys are independent
-    allowed, retry = lim.hit("k")
+    assert [lim.hit_now("k")[0] for _ in range(4)] == [True, True, True, False]
+    assert lim.hit_now("other")[0]                                # keys are independent
+    allowed, retry = lim.hit_now("k")
     assert not allowed and 1 <= retry <= 11
     now[0] = 10.5
-    assert lim.hit("k")[0]                                        # window slid
+    assert lim.hit_now("k")[0]                                    # window slid
     with pytest.raises(AppError) as e:
         for _ in range(5):
-            lim.check("k")
+            asyncio.run(lim.check("k"))
     assert e.value.status == 429 and "Retry-After" in e.value.headers
 
 
@@ -98,10 +100,10 @@ class Body(BaseModel):
     n: int
 
 
-def make_app(legacy_auth=False, max_bytes=2000):
+def make_app(max_bytes=2000):
     app = FastAPI()
     configure_api(app, environment="development", cookie_secure=False, cors_origins=[],
-                  max_request_bytes=max_bytes, legacy_auth_required=legacy_auth)
+                  max_request_bytes=max_bytes)
 
     @app.post("/api/v1/_echo")
     async def echo(body: Body):
@@ -110,14 +112,6 @@ def make_app(legacy_auth=False, max_bytes=2000):
     @app.get("/api/v1/_boom")
     async def boom():
         raise RuntimeError("secret internal detail")
-
-    @app.get("/")
-    async def index():
-        return {"page": "index"}
-
-    @app.get("/api/status")
-    async def legacy_status():
-        return {"ok": True}
     return app
 
 
@@ -154,15 +148,6 @@ def test_health_without_dependencies_and_auth_unavailable():
     assert c.get("/api/v1/auth/me").status_code == 503
 
 
-def test_legacy_guard_off_by_default_and_on_when_required():
-    assert TestClient(make_app()).get("/").status_code == 200
-    c = TestClient(make_app(legacy_auth=True), follow_redirects=False)
-    r = c.get("/")
-    assert r.status_code == 303 and r.headers["location"] == "/login?next=/"
-    assert c.get("/api/status").status_code == 401
-    assert c.get("/live").status_code == 200                      # health stays public
-
-
 # ---- WebSocket stream ------------------------------------------------------------------------------
 
 class FakeGateway:
@@ -179,7 +164,13 @@ class FakeGateway:
         return None
 
     async def list_contracts(self):
-        return []
+        return [{"token": "1", "tradingsymbol": "NIFTY27OCT26FUT"}, {"token": "2", "tradingsymbol": "NIFTY24NOV26FUT"}]
+
+    async def switch_contract(self, token):
+        for c in await self.list_contracts():
+            if c["token"] == token:
+                return c
+        raise ValueError(f"token {token} is not among the switchable contracts")
 
     def chart_snapshot(self, ppr, interval):
         self.snapshots += 1
@@ -260,6 +251,38 @@ def test_ws_backpressure_keeps_only_the_latest_snapshot_per_subscription():
     assert conn._pending == {"a": {"n": 4}, "b": {"n": 9}} and conn.snapshots_coalesced == 4
 
 
+def test_push_builds_and_encodes_each_distinct_snapshot_once():
+    gw = FakeGateway()
+    hub = StreamHub(gw, authenticate=None, allowed_intervals=(60, 300))
+    conns = [StreamConnection(ws=None, user=user(), token="t") for _ in range(3)]
+    for c in conns:
+        c.subscriptions = {"a": (1, 60), "b": (1, 300)}
+    hub.connections = set(conns)
+    hub.push_once()
+    assert gw.snapshots == 2                                   # one build per distinct (ppr, interval)
+    shared = {id(c._pending["a"]) for c in conns}
+    assert len(shared) == 1 and isinstance(conns[0]._pending["a"], Encoded)
+    assert json.loads(conns[0]._pending["a"]) == {"ppr": 1, "interval": 60, "n": 1}
+
+
+class _CaptureWs:
+    def __init__(self):
+        self.sent = []
+
+    async def send_text(self, text):
+        self.sent.append(text)
+
+
+def test_encoded_and_plain_payloads_produce_the_same_message():
+    conn = StreamConnection(ws=_CaptureWs(), user=user(), token="t")
+    asyncio.run(conn.send("snapshot", encode({"x": [1, 2]}), "c1"))
+    asyncio.run(conn.send("snapshot", {"x": [1, 2]}, "c1"))
+    asyncio.run(conn.send("ping"))
+    a, b, ping = (json.loads(t) for t in conn.ws.sent)
+    assert a["data"] == b["data"] == {"x": [1, 2]} and a["id"] == b["id"] == "c1"
+    assert (a["seq"], b["seq"], ping["seq"]) == (1, 2, 3) and ping["data"] is None and "id" not in ping
+
+
 def test_ws_multiple_subscriptions_on_one_connection():
     app, _ = ws_app({"good-token-123": user()})
     c = TestClient(app)
@@ -324,11 +347,20 @@ def test_server_mounts_v1_api_and_gateway_reads_live_state(monkeypatch):
     # FastAPI nests included routers, so check the published schema and real requests, not app.routes
     documented = set(server.app.openapi()["paths"])
     assert {"/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/market/status", "/api/v1/admin/users",
-            "/health", "/ready", "/live", "/api/contract"} <= documented
+            "/health", "/ready", "/live", "/api/v1/admin/contract"} <= documented
+    # the legacy API is gone (nothing documented outside /api/v1)
+    assert not [p for p in documented if p.startswith("/api/") and not p.startswith("/api/v1/")]
     c = TestClient(server.app)                                   # no lifespan: startup (broker login) not run
     assert c.get("/live").json() == {"status": "alive"}
     assert c.post("/api/v1/auth/login", json={"email": "a@example.com", "password": "x"}).status_code == 503
-    assert c.get("/login").status_code == 200 and "Sign in" in c.get("/login").text
+    # retired legacy pages redirect to the terminal; account links keep their token
+    for old, new in (("/", "/app/"), ("/chart", "/app/"), ("/replay", "/app/"), ("/login", "/app/login/"),
+                     ("/reset-password?token=abc", "/app/reset-password/?token=abc"),
+                     ("/verify-email?token=xyz", "/app/verify-email/?token=xyz")):
+        r = c.get(old, follow_redirects=False)
+        assert r.status_code == 308 and r.headers["location"] == new, old
+    for gone in ("/api/status", "/api/contracts", "/api/replay/sessions", "/static/app.js"):
+        assert c.get(gone).status_code == 404, gone
     monkeypatch.setitem(server.STATE, "contract", {"tradingsymbol": "T", "tick_size": 0.1, "lotsize": 65, "token": "1"})
     monkeypatch.setitem(server.STATE, "engine", TickProcessorState(0.1))
     gw = server.ServerMarketGateway()
@@ -346,8 +378,13 @@ def test_metrics_endpoint_exposes_series_with_bounded_route_labels():
     c.get("/api/v1/auth/sessions/00000000-0000-0000-0000-000000000001")   # templated route, raw id must not leak
     body = c.get("/metrics").text
     for name in ("ofmp_http_requests_total", "ofmp_http_request_duration_seconds", "ofmp_ws_connections",
-                 "ofmp_ticks_received_total", "ofmp_trades_classified_total", "ofmp_db_rows_pending"):
+                 "ofmp_ticks_received_total", "ofmp_trades_classified_total", "ofmp_db_rows_pending",
+                 "ofmp_ratelimit_fallbacks_total"):
         assert name in body
+    open_line = next(line for line in body.splitlines() if line.startswith("ofmp_market_session_open "))
+    assert open_line.split()[1] in ("0.0", "1.0")
+    assert float(next(line for line in body.splitlines()
+                      if line.startswith("ofmp_market_calendar_days_left ")).split()[1]) > -400
     assert 'route="/live"' in body
     assert "00000000-0000-0000-0000-000000000001" not in body
 

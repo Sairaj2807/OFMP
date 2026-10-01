@@ -54,7 +54,8 @@ MARKET_DATA_PROVIDER=synthetic COOKIE_SECURE=0 JWT_SECRET=<random> DATABASE_URL=
 
 ```
 src/
-  app/                  routes: / (terminal), /login
+  app/                  routes: / (terminal), /login (sign in, create account, forgot password),
+                        /reset-password, /verify-email (email links)
   components/
     chart/              FootprintChart (thin React wrapper)
     terminal/           TopBar, Watchlist, ChartGrid, ChartPanel, OrderBook, BottomBar, CommandPalette, Terminal
@@ -100,6 +101,17 @@ Alerts arrive over the same `/ws/v1/stream` connection and appear as toasts (bot
 When the tab is hidden and notifications are allowed, they also appear as desktop notifications. The
 command palette has **Open alerts**. Rules are evaluated on the server, so they fire with the terminal
 closed (history and webhooks).
+
+## Account pages, market session, contracts
+
+- **Account pages.** `/app/login/` handles sign in, create account and forgot password.
+  `/app/reset-password/` and `/app/verify-email/` are the targets of the email links. The old `/login`,
+  `/reset-password` and `/verify-email` URLs redirect here, keeping the token.
+- **Market session.** Outside an NSE session the top bar shows "Market closed" (with the holiday name,
+  when there is one) and when the market next opens, in IST. The data comes from the server's exchange
+  calendar.
+- **Contracts.** An admin (`admin.system`) sees **Make live** on the other contracts in the watchlist.
+  It switches the live feed for every user (after a confirmation) and is audited.
 
 ## Keyboard
 

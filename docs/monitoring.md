@@ -45,7 +45,7 @@
 
 ## Alerts
 
-`deploy/prometheus/alerts.yml`, validated with `promtool`:
+`deploy/prometheus/alerts.yml`, validated with `promtool` (in CI too):
 
 | Alert | Fires when |
 |---|---|
@@ -57,9 +57,18 @@
 | DatabaseRowsDropped | the writer buffer overflowed and dropped rows |
 | HighApiErrorRate | more than 5% of API requests return 5xx |
 | SlowTickProcessing | p99 tick processing is above 10 ms |
+| MarketCalendarOutdated | the NSE holiday calendar ends within 30 days |
+| RateLimitRedisFallback | rate limits fell back to per-process limits because Redis failed |
+| AlertWebhookFailures | user alert webhooks are failing |
+| AlertFiringsDropped | the alert dispatch queue overflowed |
 
-**Market hours** are approximated in UTC (weekdays, about 03:00–10:00 UTC). Exchange holidays need
-the exchange calendar (not yet built), so expect a spurious page on NSE holidays until then.
+**Market hours** come from the exchange calendar, via `ofmp_market_session_open`. It is 1 during an NSE
+session, with weekends, holidays and special sessions applied.
+- The feed alerts only fire once the session has been open for 5 minutes, so the quiet first minutes after
+  the open don't page.
+- The calendar is data: `backend/app/domain/market_data/calendars/nse.json`. Add each new year from the
+  NSE circular, and special sessions such as Muhurat trading once NSE announces their timings.
+- `ofmp_market_calendar_days_left` drives `MarketCalendarOutdated`.
 
 **Alert delivery** (Alertmanager to email, Telegram or a webhook) is configured per deployment and is
 not bundled.
@@ -71,5 +80,4 @@ These are engineering targets to measure against, not guarantees:
 - API p95 < 300 ms for chart queries
 - WebSocket connect < 2 s
 
-Load testing (hundreds of concurrent WebSocket clients) is still to be done. Measure against these
-dashboards before scaling anything.
+Measured with `tools/loadtest.py`: see `docs/load-testing.md`.

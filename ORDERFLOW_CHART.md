@@ -1,5 +1,12 @@
 # Order-flow chart (`/chart`)
 
+> **Status (Phase 9, 2026-10-01):** the `/chart`, `/` and `/replay` pages, their `/ws/chart` and
+> `/ws/frontend` sockets and the `/api/replay/*` endpoints were retired; the terminal at `/app/` replaces
+> them, over `/ws/v1/stream`. The engine-side notes below (`server._chart_payload`, interval grouping,
+> CVD offsets) still describe what the terminal receives. The per-candle table formerly built by
+> `server._candles_payload` is now `backend/app/domain/orderflow/table.py: candle_table`, still pinned by
+> the golden regression test. Page, socket and `static/` details are historical.
+
 > **Status (2026-09-30):** Arrow support has been removed; the platform runs on Angel One only. Arrow-specific parts below (exact-side `btv`/`atv` records, `arrow_trades.jsonl`, `contract_resolver.py`, `ARROW_*` settings) are historical. The engine now lives in `backend/app/domain/orderflow/` — see [docs/orderflow-engine.md](docs/orderflow-engine.md).
 
 A footprint chart drawn by OpenAlgo Charts' `Footprint` primitive from the engine's

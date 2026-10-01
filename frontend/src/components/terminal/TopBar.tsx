@@ -3,7 +3,9 @@
 import { useEffect } from "react";
 
 import { Button, Kbd, StatusDot, type DotState } from "@/components/ui/controls";
+import { istWeekdayTime } from "@/lib/format";
 import type { StreamStatus } from "@/lib/stream";
+import type { MarketSession } from "@/lib/types";
 import { useSession } from "@/stores/session";
 import { useTerminal, type Layout } from "@/stores/terminal";
 import { AlertsMenu } from "./AlertsMenu";
@@ -19,6 +21,12 @@ function connection(stream: StreamStatus, feedConnected: boolean, feedError: str
   return { state: "down", label: "Offline" };
 }
 
+function marketLabel(m: MarketSession | null): string | null {
+  if (!m || m.open) return null;
+  const reason = m.holiday ? `Market closed: ${m.holiday}` : "Market closed";
+  return m.next_open ? `${reason} · opens ${istWeekdayTime(m.next_open)} IST` : reason;
+}
+
 export function TopBar({ onOpenPalette, onLogout }: { onOpenPalette: () => void; onLogout: () => void }) {
   const user = useSession((s) => s.user);
   const stream = useSession((s) => s.stream);
@@ -28,6 +36,7 @@ export function TopBar({ onOpenPalette, onLogout }: { onOpenPalette: () => void;
   const units = useTerminal((s) => s.units);
   const setUnits = useTerminal((s) => s.setUnits);
   const conn = connection(stream, feed.connected, feed.error);
+  const closed = marketLabel(useSession((s) => s.market));
   const notice = useSession((s) => s.notice);
   const setNotice = useSession((s) => s.setNotice);
   useEffect(() => {
@@ -42,6 +51,7 @@ export function TopBar({ onOpenPalette, onLogout }: { onOpenPalette: () => void;
       <span className="h-4 w-px bg-line" aria-hidden />
       <span className="num text-[13px] text-fg" aria-label="Active contract">{feed.symbol ?? "—"}</span>
       <span title={feed.error ?? undefined}><StatusDot state={conn.state} label={conn.label} /></span>
+      {closed && <span className="text-[12px] text-muted" aria-label="Market session">{closed}</span>}
 
       {notice && (
         <div role="status" className="flex items-center gap-2 rounded border border-warn/40 bg-warn/10 px-2 py-0.5 text-[12px] text-warn">

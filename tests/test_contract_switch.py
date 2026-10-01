@@ -1,5 +1,6 @@
 """server.py's contract switcher: _activate_contract, _on_tick's per-record
-symbol tagging, and the /api/contracts + /api/contract endpoints. A fake ws
+symbol tagging, and contract listing / switching through the gateway the
+/api/v1 layer uses (POST /api/v1/admin/contract). A fake ws
 feed stands in for the live feed (server.LiveFeed) so nothing here
 touches the network."""
 import asyncio
@@ -172,7 +173,7 @@ def test_on_tick_without_a_store_configured_does_not_crash():
     server._on_tick(make_tick(cum_volume=65))   # must not raise
 
 
-# ---- /api/contracts and /api/contract ----------------------------------------------
+# ---- listing and switching contracts ----------------------------------------------
 
 def fake_angel_rows():
     return [
@@ -183,40 +184,31 @@ def fake_angel_rows():
     ]
 
 
-def test_api_contracts_angel_flags_the_active_one(monkeypatch):
+def test_gateway_lists_the_switchable_contracts(monkeypatch):
     import angel_client
     monkeypatch.setattr(angel_client, "list_configured_futures", lambda **k: fake_angel_rows())
-    run(server._activate_contract(contract("NIFTY29OCT26FUT", token="2")))
-
-    result = run(server.api_contracts())
-    assert result["data_source"] == "angel"
-    assert [c["active"] for c in result["contracts"]] == [False, True]
+    rows = run(server.ServerMarketGateway().list_contracts())
+    assert [r["tradingsymbol"] for r in rows] == ["NIFTY24SEP26FUT", "NIFTY29OCT26FUT"]
 
 
-def test_api_switch_contract_angel_valid_token(monkeypatch):
+def test_gateway_switch_contract_valid_token(monkeypatch):
     import angel_client
     monkeypatch.setattr(angel_client, "list_configured_futures", lambda **k: fake_angel_rows())
     run(server._activate_contract(contract("NIFTY24SEP26FUT", token="1")))
 
-    result = run(server.api_switch_contract(server.ContractSwitchRequest(token="2")))
-    assert result["ok"] is True
-    assert result["contract"]["tradingsymbol"] == "NIFTY29OCT26FUT"
+    switched = run(server.ServerMarketGateway().switch_contract("2"))
+    assert switched["tradingsymbol"] == "NIFTY29OCT26FUT"
     assert server.STATE["contract"]["tradingsymbol"] == "NIFTY29OCT26FUT"
 
 
-def test_api_switch_contract_angel_unknown_token_leaves_state_untouched(monkeypatch):
+def test_gateway_switch_contract_unknown_token_leaves_state_untouched(monkeypatch):
     import angel_client
     monkeypatch.setattr(angel_client, "list_configured_futures", lambda **k: fake_angel_rows())
     run(server._activate_contract(contract("NIFTY24SEP26FUT", token="1")))
 
-    result = run(server.api_switch_contract(server.ContractSwitchRequest(token="999")))
-    assert result["ok"] is False and "999" in result["error"]
+    with pytest.raises(ValueError, match="999"):
+        run(server.ServerMarketGateway().switch_contract("999"))
     assert server.STATE["contract"]["tradingsymbol"] == "NIFTY24SEP26FUT"   # unchanged
-
-
-def test_api_switch_contract_angel_missing_token_is_rejected():
-    result = run(server.api_switch_contract(server.ContractSwitchRequest()))
-    assert result["ok"] is False and "token" in result["error"]
 
 
 # ---- LiveFeed selection -------------------------------------------------------------

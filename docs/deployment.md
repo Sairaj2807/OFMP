@@ -77,8 +77,8 @@ Check:
 - `curl -I https://charts.example.com/ready` returns 200.
 - The terminal is at `https://charts.example.com/app/`.
 
-The production defaults are `AUTH_REQUIRED=1` (the legacy pages sit behind login) and
-`ALLOW_REGISTRATION=0` (accounts are created by admins).
+The production default is `ALLOW_REGISTRATION=0` (accounts are created by admins). Every page and API
+requires login.
 
 ### Existing data
 

@@ -27,6 +27,12 @@ export function intervalLabel(sec: number): string {
   return sec % 3600 === 0 ? `${sec / 3600}h` : `${sec / 60}m`;
 }
 
+/** "Mon 09:15" (IST): when the market next opens. */
+export function istWeekdayTime(iso: string): string {
+  return new Date(iso).toLocaleString("en-GB", { timeZone: IST, weekday: "short", hour: "2-digit", minute: "2-digit",
+                                                  hour12: false });
+}
+
 /** "14:05:09" for today, "29 Sep 14:05" otherwise, in IST. */
 export function istDateTime(iso: string, now: Date = new Date()): string {
   const d = new Date(iso);

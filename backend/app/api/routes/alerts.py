@@ -231,7 +231,7 @@ async def delete_channel(channel_id: uuid.UUID, request: Request, user: AuthUser
 @router.post("/channels/{channel_id}/test", summary="Send a signed test delivery to a webhook")
 async def test_channel(channel_id: uuid.UUID, request: Request, user: AuthUser = Depends(create),
                        svc: AlertService = Depends(get_service)):
-    request.app.state.limiters["alert_test"].check(str(user.id))
+    await request.app.state.limiters["alert_test"].check(str(user.id))
     channel = await svc.get_channel(user.id, channel_id)
     provider = getattr(request.app.state, "webhook_provider", None)
     if provider is None:

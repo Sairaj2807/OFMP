@@ -7,9 +7,10 @@ import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const lib = (f) => pathToFileURL(resolve(root, "static/vendor/openalgo-charts", f)).href;
+// The terminal's own adapter and vendored library (Node strips the adapter's TypeScript types).
+const lib = (f) => pathToFileURL(resolve(root, "frontend/src/vendor/openalgo-charts", f)).href;
 const { Footprint, stackedImbalances } = await import(lib("openalgo-charts.profile.mjs"));
-const { toFootprintBar, toCandle, bandRange } = await import(pathToFileURL(resolve(root, "static/orderflow_adapter.js")).href);
+const { toFootprintBar, toCandle, bandRange } = await import(pathToFileURL(resolve(root, "frontend/src/lib/adapter.ts")).href);
 
 const skip = false;
 const PPR = 2;

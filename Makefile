@@ -4,7 +4,7 @@ COMPOSE_DEV  = docker compose -f docker-compose.dev.yml
 COMPOSE_PROD = docker compose -f docker-compose.prod.yml --env-file $(or $(ENV_FILE),.env.production)
 TEST_DB ?= postgresql+asyncpg://ofmp:ofmp_dev_password@127.0.0.1:55432/ofmp_test
 
-.PHONY: help dev-services dev-api dev-frontend migrate test test-db lint frontend-test e2e build up down logs backup
+.PHONY: help dev-services dev-api dev-frontend migrate test test-db lint frontend-test e2e loadtest build up down logs backup
 
 help:            ## list targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
@@ -36,6 +36,10 @@ frontend-test:   ## frontend unit tests
 
 e2e:             ## Playwright against a running backend (see frontend/README.md)
 	cd frontend && npx playwright test
+
+loadtest:        ## load test a running dev backend (see docs/load-testing.md)
+	$(PY) tools/loadtest.py --create-users --users 40
+	$(PY) tools/loadtest.py --users 40 --conns-per-user 5 --charts 4 --duration 60
 
 build:           ## build production images
 	$(COMPOSE_PROD) build --pull

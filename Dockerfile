@@ -29,7 +29,6 @@ COPY alembic.ini config.py server.py angel_client.py angelone_autologin.py obser
      orderbook_engine.py replay_engine.py review_cli.py export_dataset.py ./
 COPY backend ./backend
 COPY research ./research
-COPY static ./static
 
 RUN mkdir -p /app/data && chown -R ofmp:ofmp /app/data
 USER ofmp

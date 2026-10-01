@@ -1,30 +1,28 @@
-"""FastAPI app: resolves the NIFTY Aug future, runs the Angel One WS ingest as
-a background task, and pushes processed order book + footprint snapshots to
-any connected browser over /ws/frontend. Angel One tokens never leave this
-process — only derived market data crosses the /ws/frontend boundary.
+"""FastAPI app: resolves the active NIFTY future, runs the Angel One ingest
+(embedded, or via the Redis ingest worker), holds the live order-flow engine,
+and serves the /api/v1 API, the /ws/v1/stream real-time stream and the
+terminal (/app). Angel One tokens never leave the process that holds the
+broker connection: only derived market data reaches browsers.
+
+The legacy pages (/, /chart, /replay and their /ws/frontend, /ws/chart and
+/api/* endpoints) were retired in Phase 9; their URLs redirect to the terminal.
 """
 import asyncio
 import contextlib
-import json
 import logging
 import os
 import time
 from datetime import date as date_cls
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 
 import angel_client
 import config
-import replay_engine
-from observation_store import (ObservationStore, list_replayable_sessions,
-                               load_session_records, session_records_path)
-from orderbook_engine import (TickProcessorState, group_candle_timestamps, group_native_bars,
-                              poc_from_rows, process_tick, stacked_imbalances_from_rows,
-                              value_area_from_rows)
+from observation_store import ObservationStore, list_replayable_sessions, load_session_records
+from orderbook_engine import TickProcessorState, group_native_bars, process_tick
 from backend.app.api.app import configure_api, start_api
 from backend.app.core import metrics
 from backend.app.core.logging import configure_logging
@@ -39,14 +37,6 @@ from backend.app.infrastructure.postgres.rows import ist_date
 from backend.app.infrastructure.postgres.writer import MarketDataWriter
 from backend.app.services.market_data.feeds import EmbeddedFeed, RedisFeed
 from backend.app.services.market_data.recorder import RawTickRecorder
-
-class NoCacheStaticFiles(StaticFiles):
-    """Forces the browser to always revalidate static assets instead of
-    silently serving a stale cached app.js/index.html after an edit."""
-    def file_response(self, *args, **kwargs):
-        resp = super().file_response(*args, **kwargs)
-        resp.headers["Cache-Control"] = "no-cache"
-        return resp
 
 
 configure_logging(config.LOG_FORMAT)
@@ -65,7 +55,7 @@ app = FastAPI(
 )
 configure_api(app, environment=config.ENVIRONMENT, cookie_secure=config.COOKIE_SECURE,
               cors_origins=config.CORS_ORIGINS, max_request_bytes=config.MAX_REQUEST_BYTES,
-              legacy_auth_required=config.AUTH_REQUIRED, metrics_enabled=config.METRICS_ENABLED,
+              metrics_enabled=config.METRICS_ENABLED,
               alert_webhooks_allow_private=config.ALERT_WEBHOOKS_ALLOW_PRIVATE)
 
 STATE = {
@@ -78,9 +68,7 @@ STATE = {
     "db_engine": None,    # set at startup when config.DATABASE_URL is configured
     "db_writer": None,
 }
-FRONTEND_CLIENTS: dict = {}   # websocket -> ppr (price-per-row, 1-5) requested by that client
-CHART_CLIENTS: dict = {}      # same, for the order-flow chart page (/ws/chart)
-CHART_BARS = 60               # footprint columns sent to the chart page (engine keeps MAX_CANDLES_KEPT)
+CHART_BARS = 60               # footprint columns per chart snapshot (engine keeps MAX_CANDLES_KEPT)
 CONTRACT_SWITCH_LOCK = asyncio.Lock()  # serializes _activate_contract calls (startup and /api/contract)
 
 
@@ -257,17 +245,21 @@ async def startup():
         print(f"[server] Logging trade observations to {config.SESSIONS_DIR}/<date>/observations.jsonl "
               f"(review live or later via review_cli.py, or visually via /replay)")
 
+    if config.RATE_LIMIT_BACKEND == "redis":
+        import redis.asyncio as aioredis
+        # short timeouts: a hung Redis must not hold up logins; the limiter falls back per process
+        STATE["limiter_redis"] = aioredis.from_url(config.REDIS_URL, socket_timeout=0.5, socket_connect_timeout=0.5)
+        print("[server] Rate limits shared through Redis")
+
     app.state.stream_task = start_api(
         app, db_engine=STATE["db_engine"], jwt_secret=config.JWT_SECRET, public_base_url=config.PUBLIC_BASE_URL,
         access_ttl_sec=config.ACCESS_TOKEN_TTL_SEC, refresh_ttl_sec=config.REFRESH_TOKEN_TTL_SEC,
         allow_registration=config.ALLOW_REGISTRATION, gateway=ServerMarketGateway(),
-        allowed_intervals=config.ALLOWED_CHART_INTERVALS_SEC)
+        allowed_intervals=config.ALLOWED_CHART_INTERVALS_SEC, redis=STATE.get("limiter_redis"))
     if app.state.auth_service is None:
         print("[server] /api/v1 auth disabled: needs DATABASE_URL and JWT_SECRET")
 
     await _activate_contract(await _resolve_default_contract())
-
-    app.state.broadcast_task = asyncio.create_task(_broadcast_loop())
 
 
 @app.on_event("shutdown")
@@ -275,7 +267,7 @@ async def shutdown():
     ws_client = STATE.get("ws_client")
     if ws_client:
         ws_client.stop()
-    for t in (getattr(app.state, "ws_task", None), getattr(app.state, "broadcast_task", None),
+    for t in (getattr(app.state, "ws_task", None),
               getattr(app.state, "stream_task", None), getattr(app.state, "alert_task", None)):
         if t:
             t.cancel()
@@ -289,68 +281,10 @@ async def shutdown():
             await writer_task
     if getattr(app.state, "webhook_provider", None) is not None:
         await app.state.webhook_provider.close()
+    if STATE.get("limiter_redis") is not None:
+        await STATE["limiter_redis"].aclose()
     if STATE.get("db_engine") is not None:
         await STATE["db_engine"].dispose()
-
-
-def _candles_payload(fp, cvd_by_candle: dict, ppr: int,
-                     interval_sec: int = config.CANDLE_INTERVAL_SEC, limit: int = 30) -> dict:
-    """Shared candle/imbalance serialization used by both the live snapshot
-    and the replay snapshot — the two build different `fp`/`cvd_by_candle`
-    but render identically on the frontend.
-
-    `interval_sec` groups native (60s) candles the same way _chart_payload's
-    group_native_bars does, but at the TIMESTAMP level
-    (orderbook_engine.group_candle_timestamps) rather than pre-built bar
-    dicts: POC/value-area/imbalances need Footprint.get_candle_rows access
-    per native candle to merge correctly (Footprint.merged_candle_rows), not
-    an already-flattened cell dict. At the default (native) interval, every
-    group is a single timestamp, so this reproduces the pre-interval-selector
-    behavior exactly — the pure rows-based helpers it now calls through
-    Footprint.poc/value_area/stacked_imbalances give bit-identical results to
-    those methods' previous inline implementations (see orderbook_engine's
-    _poc_from_rows/_value_area_from_rows/_stacked_imbalances_from_rows)."""
-    candle_ts_sorted = sorted(fp.data.keys())
-    multiple = max(1, interval_sec // config.CANDLE_INTERVAL_SEC)
-    native_window = candle_ts_sorted[-(limit * multiple):]
-    groups = group_candle_timestamps(native_window, interval_sec, config.CANDLE_INTERVAL_SEC)[-limit:]
-
-    candles = []
-    for group in groups:
-        rows = fp.merged_candle_rows(group, ppr)
-        poc = poc_from_rows(rows)
-        va = value_area_from_rows(rows, poc, config.VALUE_AREA_PCT)
-        open_ohlc = fp.candle_ohlc.get(group[0])
-        close_ohlc = fp.candle_ohlc.get(group[-1])
-        # The running CVD "as of" this (possibly still-forming) group is the
-        # last of its native candles that has actually CLOSED — cvd_by_candle
-        # only ever has entries for closed candles (see _advance_candle), and
-        # a group's later native minutes may not have closed yet even if its
-        # earlier ones have.
-        cvd = next((cvd_by_candle[t] for t in reversed(group) if t in cvd_by_candle), None)
-        candles.append({
-            "ts": group[0],
-            "poc": poc,
-            "value_area": list(va) if va else None,
-            "delta": sum(fp.candle_delta(t) for t in group),
-            "cvd": cvd,
-            "bullish": (close_ohlc["close"] >= open_ohlc["open"]) if (open_ohlc and close_ohlc) else None,
-            "close_row": fp.row_price_for(close_ohlc["close"], ppr) if close_ohlc else None,
-            "rows": [{"price": row.price, "buy": row.buy_volume, "sell": row.sell_volume, "delta": row.delta}
-                     for row in rows],
-        })
-
-    imbalances = (stacked_imbalances_from_rows(fp.merged_candle_rows(groups[-1], ppr),
-                                               config.IMBALANCE_THRESHOLD, config.MIN_STACK)
-                 if groups else [])
-    return {
-        "interval_sec": interval_sec,
-        "candles": candles,
-        "imbalances": [
-            {"kind": stack[0][0], "prices": [p for _, p in stack]}
-            for stack in imbalances
-        ],
-    }
 
 
 def _book_payload(book) -> dict:
@@ -384,28 +318,6 @@ def _status_payload(engine: TickProcessorState, contract: dict) -> dict:
         "tick_size": contract["tick_size"],
         "lot_size": contract["lotsize"],
     }
-
-
-def _build_snapshot(ppr: int = 1, interval_sec: int = config.CANDLE_INTERVAL_SEC) -> dict:
-    engine: TickProcessorState = STATE["engine"]
-    contract = STATE["contract"]
-    if engine is None or contract is None:
-        return {"ready": False}
-
-    return {
-        "ready": True,
-        "status": _status_payload(engine, contract),
-        "book": _book_payload(engine.book),
-        "quote": _quote_payload(engine),
-        "footprint": _candles_payload(engine.footprint, engine.cvd_by_candle, ppr, interval_sec=interval_sec),
-    }
-
-
-def _build_snapshot_from_state(state: tuple) -> dict:
-    """FRONTEND_CLIENTS/ws_frontend store (ppr, interval_sec) per client, the
-    same shape CHART_CLIENTS does — see _build_chart_snapshot_from_state."""
-    ppr, interval_sec = state
-    return _build_snapshot(ppr, interval_sec)
 
 
 # ---------------------------------------------------------------------------
@@ -498,182 +410,6 @@ def _build_chart_snapshot(ppr: int = 1, interval_sec: int = config.CANDLE_INTERV
     }
 
 
-def _build_chart_snapshot_from_state(state: tuple) -> dict:
-    """CHART_CLIENTS/ws_chart store (ppr, interval_sec) per client — this is
-    the `build` callback _push_snapshots and _serve_state_socket call."""
-    ppr, interval_sec = state
-    return _build_chart_snapshot(ppr, interval_sec)
-
-
-# ---------------------------------------------------------------------------
-# Orderflow Replay verification API (see REPLAY_WORKFLOW.md).
-#
-# Serves saved sessions back as the same footprint/book shape the live
-# dashboard renders, so /replay can scrub a past day's trades side by side
-# with Vtrender's own Orderflow Replay for that date. Read-only: nothing
-# here touches the live engine or the observation store's write path.
-# ---------------------------------------------------------------------------
-
-_REPLAY_CACHE: dict = {}  # date_str -> (path, mtime, records_list)
-
-
-def _get_session_observations(date_str: str) -> list:
-    """A day's saved Angel observations (see
-    observation_store.session_records_path), cached until the file changes."""
-    path = session_records_path(date_str)
-    if path is None:
-        return []
-    mtime = os.path.getmtime(path)
-    cached = _REPLAY_CACHE.get(date_str)
-    if cached and cached[0] == path and cached[1] == mtime:
-        return cached[2]
-    observations = load_session_records(date_str)
-    _REPLAY_CACHE[date_str] = (path, mtime, observations)
-    return observations
-
-
-def _trade_preview(obs: Optional[dict]) -> Optional[dict]:
-    if obs is None:
-        return None
-    return {
-        "trade_id": obs["trade_id"],
-        "ts_ms": obs["ts_ms"],
-        "ltp": obs["ltp"],
-        **replay_engine.record_summary(obs),
-    }
-
-
-def _replay_source(observations: list) -> dict:
-    """Source of a saved session — always Angel observations."""
-    return _source_info()
-
-
-def _replay_cursor(date_str: str, observations: list, state, tick_size: float,
-                   cursor_ms: int) -> dict:
-    """Session and neighbouring-trade fields shared by the replay footprint
-    snapshot and the replay chart payload."""
-    idx = state.trade_count - 1  # index into `observations` of the last trade included
-    current_obs = observations[idx] if idx >= 0 else None
-    prev_obs = observations[idx - 1] if idx - 1 >= 0 else None
-    next_obs = observations[idx + 1] if idx + 1 < len(observations) else None
-    return {
-        "session": {
-            "date": date_str,
-            "start_ms": observations[0]["ts_ms"],
-            "end_ms": observations[-1]["ts_ms"],
-            "trade_count": len(observations),
-            "cursor_ms": cursor_ms,
-            "tick_size": tick_size,
-        },
-        "cursor_trade": _trade_preview(current_obs),
-        "prev_trade": _trade_preview(prev_obs),
-        "next_trade": _trade_preview(next_obs),
-        "gap_to_next_ms": (next_obs["ts_ms"] - current_obs["ts_ms"])
-            if (current_obs is not None and next_obs is not None) else None,
-        "gap_from_prev_ms": (current_obs["ts_ms"] - prev_obs["ts_ms"])
-            if (current_obs is not None and prev_obs is not None) else None,
-    }
-
-
-@app.get("/api/replay/sessions")
-async def api_replay_sessions():
-    return {"sessions": list_replayable_sessions()}
-
-
-@app.get("/api/replay/{date}/meta")
-async def api_replay_meta(date: str):
-    observations = _get_session_observations(date)
-    bounds = replay_engine.session_bounds(observations)
-    if bounds is None:
-        return {"found": False}
-    contract = STATE["contract"]
-    return {
-        "found": True,
-        "tick_size": contract["tick_size"] if contract else None,
-        "lot_size": contract["lotsize"] if contract else None,
-        **bounds,
-    }
-
-
-@app.get("/api/replay/{date}/snapshot")
-async def api_replay_snapshot(date: str, as_of_ms: Optional[int] = None, ppr: int = 1,
-                              interval: int = config.CANDLE_INTERVAL_SEC):
-    observations = _get_session_observations(date)
-    if not observations:
-        return {"ready": False}
-
-    contract = STATE["contract"]
-    tick_size = contract["tick_size"] if contract else 0.05
-    ppr = max(1, min(5, ppr))
-    interval_sec = _clamp_chart_interval(interval)
-    cursor_ms = as_of_ms if as_of_ms is not None else observations[-1]["ts_ms"]
-
-    state = replay_engine.build_replay_state(observations, tick_size, cursor_ms)
-
-    return {
-        "ready": True,
-        "book": _book_payload(state.book),
-        "footprint": _candles_payload(state.footprint, state.cvd_by_candle, ppr, interval_sec=interval_sec),
-        **_replay_cursor(date, observations, state, tick_size, cursor_ms),
-    }
-
-
-@app.get("/api/replay/{date}/chart")
-async def api_replay_chart(date: str, as_of_ms: Optional[int] = None, ppr: int = 1,
-                           interval: int = config.CANDLE_INTERVAL_SEC):
-    """Same as /snapshot but with the order-flow chart's payload (see
-    _chart_payload) instead of the footprint-table one. `interval` (seconds)
-    is snapped to config.ALLOWED_CHART_INTERVALS_SEC — see
-    orderbook_engine.group_native_bars."""
-    observations = _get_session_observations(date)
-    if not observations:
-        return {"ready": False}
-
-    contract = STATE["contract"]
-    tick_size = contract["tick_size"] if contract else 0.05
-    ppr = max(1, min(5, ppr))
-    interval_sec = _clamp_chart_interval(interval)
-    cursor_ms = as_of_ms if as_of_ms is not None else observations[-1]["ts_ms"]
-
-    state = replay_engine.build_replay_state(observations, tick_size, cursor_ms)
-
-    return {
-        "ready": True,
-        "mode": "replay",
-        "source": _replay_source(observations),
-        "book": _book_payload(state.book),
-        "chart": _chart_payload(state.footprint, state.cvd_tracker.cvd,
-                                state.last_candle_seen, ppr, interval_sec=interval_sec),
-        "lot_size": contract["lotsize"] if contract else None,
-        **_replay_cursor(date, observations, state, tick_size, cursor_ms),
-    }
-
-
-@app.get("/replay")
-async def replay_page():
-    return FileResponse("static/replay.html")
-
-
-@app.get("/chart")
-async def chart_page():
-    return FileResponse("static/orderflow.html")
-
-
-@app.get("/login", include_in_schema=False)
-async def login_page():
-    return FileResponse("static/login.html")
-
-
-@app.get("/reset-password", include_in_schema=False)
-async def reset_password_page():
-    return FileResponse("static/reset-password.html")
-
-
-@app.get("/verify-email", include_in_schema=False)
-async def verify_email_page():
-    return FileResponse("static/verify-email.html")
-
-
 class ServerMarketGateway:
     """The live engine, as the /api/v1 layer sees it (backend/app/api/gateway.py)."""
 
@@ -692,6 +428,9 @@ class ServerMarketGateway:
 
     async def list_contracts(self) -> list:
         return await _list_candidate_contracts()
+
+    async def switch_contract(self, token: str) -> dict:
+        return await _switch_contract(token)
 
     def chart_snapshot(self, ppr: int, interval_sec: int) -> dict:
         return _build_chart_snapshot(ppr, interval_sec)
@@ -755,103 +494,6 @@ def _replay_library() -> ReplayLibrary:
     return _REPLAY_LIBRARY
 
 
-async def _push_snapshots(clients: dict, build) -> None:
-    if not clients:
-        return
-    # build once per distinct state in use, not once per client. `state` is
-    # whatever a client's parse callback produced (an int ppr for
-    # FRONTEND_CLIENTS, a (ppr, interval_sec) tuple for CHART_CLIENTS) — both
-    # hashable, so this dedup works unchanged for either.
-    payload_by_state = {}
-    dead = []
-    for ws, state in list(clients.items()):   # copy: clients may connect mid-send
-        payload = payload_by_state.get(state)
-        if payload is None:
-            payload = json.dumps(build(state))
-            payload_by_state[state] = payload
-        try:
-            await ws.send_text(payload)
-        except Exception:
-            dead.append(ws)
-    for ws in dead:
-        clients.pop(ws, None)
-
-
-async def _broadcast_loop():
-    while True:
-        await asyncio.sleep(config.BROADCAST_INTERVAL_SEC)
-        await _push_snapshots(FRONTEND_CLIENTS, _build_snapshot_from_state)
-        await _push_snapshots(CHART_CLIENTS, _build_chart_snapshot_from_state)
-
-
-def _parse_ppr_interval_message(msg, current: tuple) -> tuple:
-    """{"ppr": n, "interval": seconds} parsing shared by /ws/frontend and
-    /ws/chart — both send the same two-field message, and both pages always
-    send both fields together (see sendState() in app.js/orderflow.js), so
-    either one missing from a message keeps the CURRENT value rather than
-    resetting to a default. (Pre-interval-selector, /ws/frontend's socket
-    only ever carried "ppr" and a bare {} reset it to 1 — that one-field
-    quirk doesn't carry over now that ppr and interval share one message.)"""
-    if not isinstance(msg, dict):
-        return current
-    cur_ppr, cur_interval = current
-    try:
-        ppr = max(1, min(5, int(msg.get("ppr", cur_ppr))))
-    except (ValueError, TypeError):
-        ppr = cur_ppr
-    interval_sec = _clamp_chart_interval(msg.get("interval", cur_interval))
-    return (ppr, interval_sec)
-
-
-async def _serve_state_socket(websocket: WebSocket, clients: dict, default_state, parse, build) -> None:
-    """Accept a browser socket, send an immediate snapshot, and track
-    whatever per-client `state` each incoming JSON message resolves to via
-    `parse(msg, current_state) -> new_state | None` (None = message changed
-    nothing, keep the current state)."""
-    await websocket.accept()
-    clients[websocket] = default_state
-    try:
-        await websocket.send_text(json.dumps(build(default_state)))
-        while True:
-            msg = await websocket.receive_text()
-            try:
-                msg_obj = json.loads(msg)
-            except (ValueError, TypeError, json.JSONDecodeError):
-                continue
-            state = parse(msg_obj, clients[websocket])
-            if state is not None:
-                clients[websocket] = state
-    except WebSocketDisconnect:
-        pass
-    finally:
-        clients.pop(websocket, None)
-
-
-@app.websocket("/ws/frontend")
-async def ws_frontend(websocket: WebSocket):
-    await _serve_state_socket(websocket, FRONTEND_CLIENTS, (1, config.CANDLE_INTERVAL_SEC),
-                              _parse_ppr_interval_message, _build_snapshot_from_state)
-
-
-@app.websocket("/ws/chart")
-async def ws_chart(websocket: WebSocket):
-    await _serve_state_socket(websocket, CHART_CLIENTS, (1, config.CANDLE_INTERVAL_SEC),
-                              _parse_ppr_interval_message, _build_chart_snapshot_from_state)
-
-
-@app.get("/api/status")
-async def api_status():
-    return {
-        "contract": STATE["contract"],
-        "connected": STATE["connected"],
-        "error": STATE["last_error"],
-        "tick_count": STATE["engine"].tick_count if STATE["engine"] else 0,
-        "uptime_sec": time.time() - STATE["started_at"],
-        "feed": _feed_health(),
-        "database": STATE["db_writer"].stats() if STATE.get("db_writer") else None,
-    }
-
-
 def _feed_health() -> Optional[dict]:
     feed = STATE.get("ws_client")
     health = getattr(feed, "health", None)
@@ -868,14 +510,7 @@ def _feed_health() -> Optional[dict]:
 # (config.INSTRUMENT_NAME) only, not to a different underlying entirely.
 # ---------------------------------------------------------------------------
 
-ANGEL_CANDIDATE_MONTHS = 4   # how many upcoming Angel expiries /api/contracts offers
-
-
-def _current_contract_key() -> tuple:
-    contract = STATE.get("contract")
-    if not contract:
-        return (None, None)
-    return (contract.get("token"), contract.get("tradingsymbol"))
+ANGEL_CANDIDATE_MONTHS = 4   # how many upcoming Angel expiries /api/v1/market/contracts offers
 
 
 async def _list_candidate_contracts() -> list:
@@ -885,46 +520,38 @@ async def _list_candidate_contracts() -> list:
     return rows[:ANGEL_CANDIDATE_MONTHS]
 
 
-@app.get("/api/contracts")
-async def api_contracts():
-    """Candidate contracts for the switcher dropdown, with the currently
-    active one flagged so the frontend can preselect it."""
-    contracts = await _list_candidate_contracts()
-    cur_token, cur_symbol = _current_contract_key()
-    for c in contracts:
-        c["active"] = (c.get("token") == cur_token) if cur_token is not None else (c.get("tradingsymbol") == cur_symbol)
-    return {"data_source": "angel", "contracts": contracts}
-
-
-class ContractSwitchRequest(BaseModel):
-    token: Optional[str] = None       # the Angel scrip-master token to switch to
-
-
-@app.post("/api/contract")
-async def api_switch_contract(payload: ContractSwitchRequest):
-    """Hot-swaps the live feed to a different contract from the /api/contracts
-    list. Resets the live footprint/CVD/order book (see _activate_contract —
-    they're specific to one instrument's price series and can't carry over);
-    never touches saved sessions, and observation_store keeps logging under
-    today's date, each record now tagged with whichever symbol was active
-    when it was recorded (see _on_tick)."""
-    if not payload.token:
-        return {"ok": False, "error": "token is required for the angel data source"}
-    rows = await asyncio.to_thread(angel_client.list_configured_futures)
-    contract = next((r for r in rows if str(r["token"]) == str(payload.token)), None)
+async def _switch_contract(token: str) -> dict:
+    """Hot-swaps the live feed to another contract of the list. Resets the live
+    footprint / CVD / order book (they belong to one instrument's price
+    series); stored sessions are untouched, and every stored trade carries the
+    symbol that was active when it was recorded (see _on_tick)."""
+    contract = next((c for c in await _list_candidate_contracts() if str(c.get("token")) == str(token)), None)
     if contract is None:
-        return {"ok": False, "error": f"token {payload.token} not found among unexpired contracts"}
-
+        raise ValueError(f"token {token} is not among the switchable contracts")
     await _activate_contract(contract)
-    return {"ok": True, "contract": STATE["contract"]}
+    return STATE["contract"]
 
 
-@app.get("/")
-async def index():
-    return FileResponse("static/index.html")
+# ---------------------------------------------------------------------------
+# Retired legacy URLs: redirect to the terminal. The account pages keep their
+# query string, so links in emails sent before the change still work.
+# ---------------------------------------------------------------------------
+
+_LEGACY_REDIRECTS = {"/": "/app/", "/chart": "/app/", "/replay": "/app/", "/login": "/app/login/",
+                     "/reset-password": "/app/reset-password/", "/verify-email": "/app/verify-email/"}
 
 
-app.mount("/static", NoCacheStaticFiles(directory="static"), name="static")
+def _legacy_redirect(target: str):
+    async def redirect(request: Request):
+        query = request.url.query
+        return RedirectResponse(target + (f"?{query}" if query else ""), status_code=308)
+    return redirect
+
+
+for _path, _target in _LEGACY_REDIRECTS.items():
+    app.add_api_route(_path, _legacy_redirect(_target), methods=["GET"], include_in_schema=False)
+
+
 if os.path.isdir(config.FRONTEND_DIST):
     # The terminal (Next.js static export, basePath /app): same origin as the API and stream.
     app.mount("/app", StaticFiles(directory=config.FRONTEND_DIST, html=True), name="frontend")

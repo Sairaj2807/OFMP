@@ -9,7 +9,15 @@ const signedOut = { storageState: { cookies: [], origins: [] } };
 async function openTerminal(page: Page) {
   await page.goto("/app/");
   await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+  // the user's server-side workspace is applied asynchronously after sign-in: wait for it,
+  // so it cannot overwrite the layout a test sets right after opening the terminal
+  if ((await page.request.get("/api/v1/workspaces")).ok()) {
+    await expect(page.getByRole("button", { name: /Workspace/ })).toContainText(/Saved|Saving/);
+  }
 }
+
+// the page's own alert (Next.js adds a role=alert route announcer outside <main>)
+const pageAlert = (page: Page) => page.locator("main").getByRole("alert");
 
 test.describe("signed out", () => {
   test.use(signedOut);
@@ -27,6 +35,33 @@ test("wrong password shows an error", async ({ page }) => {
   await page.getByRole("button", { name: "Sign in" }).click();
   // scoped to the form: Next.js adds its own role=alert route announcer
   await expect(page.locator("form").getByRole("alert")).toContainText("Error:");
+});
+
+test("account pages: legacy URLs redirect, forgot password, reset and verify links", async ({ page }) => {
+  // old links (e.g. in emails sent before the legacy pages were retired) land on the terminal's pages
+  await page.goto("/login");
+  await page.waitForURL(/\/app\/login\/$/);
+  await page.getByRole("button", { name: "Forgot password?" }).click();
+  await expect(page.getByRole("heading", { name: "Reset password" })).toBeVisible();
+  await page.getByLabel("Email").fill("nobody-e2e@example.com");
+  await page.getByRole("button", { name: "Send reset link" }).click();
+  await expect(page.locator("main").getByRole("status")).not.toBeEmpty();      // same answer whether or not the account exists
+  await page.getByRole("button", { name: "Back to sign in" }).click();
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page.getByLabel("Display name (optional)")).toBeVisible();
+
+  await page.goto("/reset-password?token=not-a-real-token-123");
+  await page.waitForURL(/\/app\/reset-password\/\?token=not-a-real-token-123$/);
+  await page.getByLabel("New password", { exact: true }).fill("another password 9");
+  await page.getByLabel("Confirm new password").fill("another password 9");
+  await page.getByRole("button", { name: "Set password" }).click();
+  await expect(pageAlert(page)).toContainText("Error:");
+  await page.goto("/app/reset-password/");
+  await expect(pageAlert(page)).toContainText("missing its token");
+
+  await page.goto("/verify-email?token=not-a-real-token-456");
+  await page.waitForURL(/\/app\/verify-email\/\?token=not-a-real-token-456$/);
+  await expect(pageAlert(page)).toContainText("Error:");
 });
 
 test("sign out ends the session", async ({ page }) => {

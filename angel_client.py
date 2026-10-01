@@ -159,7 +159,7 @@ def list_configured_futures(instruments: list = None, as_of: Optional[date] = No
     which defaults to None ("any month, take the soonest unexpired one" —
     the auto-roll behavior); set it to pin a specific far-month contract
     instead. Passed explicitly (not read from config directly) so this also
-    serves /api/contracts, which wants every upcoming month, unfiltered."""
+    serves /api/v1/market/contracts, which wants every upcoming month, unfiltered."""
     instruments = instruments if instruments is not None else fetch_instrument_master()
     as_of = as_of or date.today()
 

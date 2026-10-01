@@ -53,6 +53,7 @@ A change in classifier behaviour ships as a new classifier version. See `docs/or
 | Terminal (frontend) | `frontend/README.md` |
 | Deployment | `docs/deployment.md` |
 | Monitoring and alerts | `docs/monitoring.md` |
+| Load testing and measured capacity | `docs/load-testing.md` |
 | Backups and disaster recovery | `docs/disaster-recovery.md` |
 | Security and threat model | `docs/security.md` |
 | Original research | `VTRENDERS_RECONSTRUCTED_ALGORITHM.md`, `TRADE_CLASSIFICATION.md`, `REPLAY_WORKFLOW.md` |

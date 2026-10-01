@@ -3,7 +3,8 @@
 // ofmp_csrf cookie in X-CSRF-Token (double-submit). An expired access token
 // is refreshed once, transparently, then the request is retried.
 import type {
-  AlertChannel, AlertEvent, AlertKinds, AlertRule, AlertRuleInput, Contract, ReplaySessionInfo, User, Workspace,
+  AlertChannel, AlertEvent, AlertKinds, AlertRule, AlertRuleInput, Contract, MarketSession, ReplaySessionInfo, User,
+  Workspace,
   WorkspaceSummary,
 } from "./types";
 
@@ -63,7 +64,9 @@ export class ApiClient {
 
   async request<T>(method: string, path: string, body?: unknown, keepalive = false): Promise<T> {
     let res = await this.raw(method, path, body, keepalive);
-    const isAuthCall = path.startsWith("/api/v1/auth/login") || path.startsWith("/api/v1/auth/refresh");
+    // account calls answer for themselves: a 401 there is never an expired session
+    const isAuthCall = ["login", "refresh", "register", "password-reset", "verify-email"]
+      .some((p) => path.startsWith(`/api/v1/auth/${p}`));
     if (res.status === 401 && !isAuthCall && (await this.refresh())) {
       res = await this.raw(method, path, body, keepalive);
     }
@@ -81,6 +84,13 @@ export class ApiClient {
   login = (email: string, password: string) =>
     this.request<{ user: User; expires_in: number }>("POST", "/api/v1/auth/login", { email, password });
   logout = () => this.request<void>("POST", "/api/v1/auth/logout");
+  register = (email: string, password: string, displayName: string | null) =>
+    this.request<{ message: string }>("POST", "/api/v1/auth/register", { email, password, display_name: displayName });
+  requestPasswordReset = (email: string) =>
+    this.request<{ message: string }>("POST", "/api/v1/auth/password-reset/request", { email });
+  confirmPasswordReset = (token: string, newPassword: string) =>
+    this.request<unknown>("POST", "/api/v1/auth/password-reset/confirm", { token, new_password: newPassword });
+  verifyEmail = (token: string) => this.request<unknown>("POST", "/api/v1/auth/verify-email", { token });
   contracts = () => this.request<{ data: Contract[] }>("GET", "/api/v1/market/contracts");
   replaySessions = () => this.request<{ data: ReplaySessionInfo[] }>("GET", "/api/v1/market/replay/sessions");
 
@@ -113,8 +123,12 @@ export class ApiClient {
   testAlertChannel = (id: string) =>
     this.request<{ ok: boolean; error: string | null }>("POST", `/api/v1/alerts/channels/${encodeURIComponent(id)}/test`);
 
+  switchContract = (token: string) =>
+    this.request<{ contract: Contract }>("POST", "/api/v1/admin/contract", { token });
+
   marketStatus = () =>
-    this.request<{ contract: Contract | null; feed: { connected: boolean; error?: string | null } | null }>(
+    this.request<{ contract: Contract | null; feed: { connected: boolean; error?: string | null } | null;
+                   session: MarketSession }>(
       "GET", "/api/v1/market/status");
 }
 

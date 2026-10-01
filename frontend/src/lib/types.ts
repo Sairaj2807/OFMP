@@ -9,6 +9,16 @@ export interface User {
   permissions?: string[];
 }
 
+/** Exchange session state (holiday calendar applied), from /api/v1/market/status. */
+export interface MarketSession {
+  exchange: string;
+  open: boolean;
+  session: { open: string; close: string; name: string | null } | null;
+  holiday: string | null;
+  next_open: string | null;
+  calendar_covers_today: boolean;
+}
+
 export interface Contract {
   token: string | null;
   tradingsymbol: string;

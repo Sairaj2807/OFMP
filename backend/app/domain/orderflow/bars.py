@@ -90,9 +90,9 @@ def group_candle_timestamps(ts_list: list, interval_sec: int,
     sharing one `interval_sec`-wide display bucket, preserving order.
 
     Companion to group_native_bars, which groups already-SERIALIZED native
-    bar dicts (the /chart footprint-primitive payload's shape). This instead
-    groups the plain timestamps themselves, for a caller (server.
-    _candles_payload, the older per-candle footprint-TABLE payload) that
+    bar dicts (the chart payload's shape). This instead groups the plain
+    timestamps themselves, for a caller (table.candle_table, the per-candle
+    table) that
     computes each display candle's POC/value-area/imbalances on demand from
     the underlying Footprint (Footprint.merged_candle_rows) rather than from
     pre-built bar dicts — those need the real candle_ts values to look up,

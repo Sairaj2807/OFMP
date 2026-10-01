@@ -17,6 +17,9 @@ class MarketGateway(Protocol):
     async def list_contracts(self) -> list:
         """Contracts available to switch to."""
 
+    async def switch_contract(self, token: str) -> dict:
+        """Make the contract with this token the live one; returns it. Raises ValueError if unknown."""
+
     def chart_snapshot(self, ppr: int, interval_sec: int) -> dict:
         """The live order-flow chart snapshot for these display settings."""
 

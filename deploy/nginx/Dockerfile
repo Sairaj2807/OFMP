@@ -13,8 +13,7 @@ FROM node:24-alpine AS csp
 WORKDIR /csp
 COPY deploy/nginx/csp-hashes.mjs ./
 COPY --from=frontend /build/out ./out
-COPY static/*.html ./static/
-RUN node csp-hashes.mjs csp.conf $(find out static -name '*.html')
+RUN node csp-hashes.mjs csp.conf $(find out -name '*.html')
 
 FROM nginx:1.30-alpine
 # OS security fixes released after the base image was built

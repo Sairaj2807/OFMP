@@ -134,9 +134,6 @@ REFRESH_TOKEN_TTL_SEC = int(os.environ.get("REFRESH_TOKEN_TTL_SEC", 30 * 24 * 36
 # Secure cookies are only sent over HTTPS (browsers also allow http://localhost).
 COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "1").lower() not in ("0", "false", "no")
 ALLOW_REGISTRATION = os.environ.get("ALLOW_REGISTRATION", "1").lower() not in ("0", "false", "no")
-# Require login for the legacy pages and sockets (/, /chart, /replay, /ws/*, /api/*).
-# Off by default until the new frontend lands; /api/v1 always requires auth.
-AUTH_REQUIRED = os.environ.get("AUTH_REQUIRED", "0").lower() not in ("0", "false", "no")
 # Comma-separated origins allowed to call the API cross-origin (empty = same-origin only).
 CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
 MAX_REQUEST_BYTES = int(os.environ.get("MAX_REQUEST_BYTES", 1_000_000))
@@ -148,6 +145,11 @@ if ENVIRONMENT == "production" and SYNTHETIC_FEED:
 # METRICS_PORT on the ingest worker.
 METRICS_ENABLED = os.environ.get("METRICS_ENABLED", "1").lower() not in ("0", "false", "no")
 METRICS_PORT = int(os.environ.get("METRICS_PORT", 9108))
+# Rate limits: "redis" shares them across every API process (REDIS_URL); "memory"
+# keeps them per process. Default: redis outside development.
+RATE_LIMIT_BACKEND = os.environ.get("RATE_LIMIT_BACKEND", "memory" if ENVIRONMENT == "development" else "redis")
+if RATE_LIMIT_BACKEND not in ("redis", "memory"):
+    raise ValueError(f"RATE_LIMIT_BACKEND must be redis or memory, got {RATE_LIMIT_BACKEND!r}")
 # Alert webhooks may target http:// URLs and private/loopback addresses (a
 # receiver on your own machine). Development only: never in production.
 ALERT_WEBHOOKS_ALLOW_PRIVATE = os.environ.get(

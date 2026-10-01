@@ -72,7 +72,7 @@ def client():
                      "email_tokens, audit_logs, alert_rules, alert_events, notification_channels CASCADE"))
     app = FastAPI()
     configure_api(app, environment="development", cookie_secure=False, cors_origins=[],
-                  max_request_bytes=200_000, legacy_auth_required=False, alert_webhooks_allow_private=True)
+                  max_request_bytes=200_000, alert_webhooks_allow_private=True)
     engine = create_engine(TEST_DATABASE_URL)
     svc = AuthService(engine, SECRET, MemoryEmailSender(), "http://testserver")
     app.state.auth_service, app.state.db_engine = svc, engine

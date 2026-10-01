@@ -56,6 +56,15 @@ export function Terminal() {
   useWorkspaces(user !== null);
   useAlerts(user !== null);
 
+  // exchange session (holidays applied): refreshed every minute for the top bar
+  useEffect(() => {
+    if (!user) return;
+    const load = () => api.marketStatus().then((s) => useSession.getState().setMarket(s.session ?? null)).catch(() => undefined);
+    void load();
+    const timer = setInterval(load, 60_000);
+    return () => clearInterval(timer);
+  }, [user]);
+
   const logout = useCallback(async () => {
     await flushSave().catch(() => undefined);   // keep the last layout change
     await api.logout().catch(() => undefined);

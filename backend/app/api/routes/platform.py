@@ -2,16 +2,19 @@
 
 Market data comes from app.state.market, a MarketGateway the hosting
 application provides (see backend/app/api/gateway.py)."""
+from datetime import datetime, timezone
 from typing import Optional
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 
-from backend.app.api.deps import get_auth_service, require_permission
+from backend.app.api.deps import get_auth_service, request_info, require_permission
 from backend.app.api.schemas import Page
 from backend.app.core.errors import AppError
-from backend.app.services.auth.service import AuthService
+from backend.app.infrastructure.postgres.schema import audit_logs
+from backend.app.services.auth.service import AuthService, AuthUser
 
 health_router = APIRouter(tags=["health"])
 market_router = APIRouter(prefix="/api/v1/market", tags=["market"])
@@ -72,7 +75,9 @@ async def health(request: Request):
                    summary="Active contract and live feed status")
 async def market_status(request: Request):
     gw = _gateway(request)
-    return {"contract": gw.active_contract(), "feed": gw.feed_status()}
+    calendar = request.app.state.market_calendar
+    return {"contract": gw.active_contract(), "feed": gw.feed_status(),
+            "session": calendar.status(datetime.now(timezone.utc))}
 
 
 @market_router.get("/replay/sessions", dependencies=[Depends(require_permission("market.read"))],
@@ -95,6 +100,34 @@ async def admin_users(limit: int = Query(50, ge=1, le=200), cursor: Optional[str
                       svc: AuthService = Depends(get_auth_service)):
     items, next_cursor = await svc.list_users(limit, cursor)
     return Page(data=items, next_cursor=next_cursor)
+
+
+admin_system = require_permission("admin.system")
+
+
+class ContractSwitch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    token: str = Field(min_length=1, max_length=32, description="token from /api/v1/market/contracts")
+
+
+@admin_router.post("/contract", summary="Switch the live feed to another contract (resets the live footprint)")
+async def switch_contract(body: ContractSwitch, request: Request,
+                          user: AuthUser = Depends(admin_system)):
+    gw = _gateway(request)
+    previous = (gw.active_contract() or {}).get("tradingsymbol")
+    try:
+        contract = await gw.switch_contract(body.token)
+    except ValueError as e:
+        raise AppError("UNKNOWN_CONTRACT", str(e), 422) from None
+    engine = getattr(request.app.state, "db_engine", None)
+    if engine is not None:
+        info = request_info(request)
+        async with engine.begin() as conn:
+            await conn.execute(audit_logs.insert().values(
+                actor_user_id=user.id, action="contract.switch", target_type="contract",
+                target_id=contract.get("tradingsymbol"), ip=info.ip, user_agent=info.user_agent,
+                request_id=info.request_id, details={"from": previous}))
+    return {"contract": contract}
 
 
 @admin_router.get("/system", dependencies=[Depends(require_permission("admin.system"))],

@@ -74,7 +74,7 @@ def rate_limit(name: str, key: str = "ip"):
     async def dependency(request: Request) -> None:
         limiter = request.app.state.limiters.get(name)
         if limiter is not None:
-            limiter.check(f"{name}:{request.client.host if request.client else '?'}")
+            await limiter.check(f"{name}:{request.client.host if request.client else '?'}")
     return dependency
 
 

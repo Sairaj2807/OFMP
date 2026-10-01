@@ -998,3 +998,71 @@ Done on 2026-10-01.
 - Rate limits are per process (Redis-backed limits are already an open item).
 - Alerts on order-book conditions (e.g. book imbalance), and per-user time windows (e.g. market hours
   only).
+
+## 23. Phase 9 status (multi-process readiness, calendar, load test, legacy retired)
+
+Done on 2026-10-01.
+
+**Shared rate limits:**
+- `RedisSlidingWindowLimiter` keeps one sorted set per key, updated in a single MULTI transaction.
+  Refused attempts are not counted. The limiter interface is now async.
+- `RATE_LIMIT_BACKEND=redis` is the default outside development. The login, alert-delivery and other
+  limits now hold across every API process.
+- Verified with two real API processes: an account got exactly 10 attempts in total, then both processes
+  returned 429.
+- If Redis fails, the limiter uses its in-process twin, logged and counted as
+  `ofmp_ratelimit_fallbacks_total`. The client has a 0.5 s timeout, and Redis is skipped for 5 s after a
+  failure.
+- Verified with Redis frozen (`docker pause`): the first login took 1.1 s, later ones were normal speed,
+  and shared limits resumed when Redis came back.
+
+**NSE trading calendar:**
+- `domain/market_data/calendar.py` reads its data from `calendars/nse.json`:
+  - the 2026 holidays (15 weekdays), cross-checked against published NSE holiday lists; re-check against
+    the official circular
+  - room for special sessions such as Muhurat trading
+- Outputs:
+  - `ofmp_market_session_open` and `ofmp_market_calendar_days_left` (computed when Prometheus scrapes)
+  - a `session` block in `/api/v1/market/status`
+  - "Market closed · opens … IST" in the terminal
+- Prometheus feed alerts now use the calendar (open for the last 5 minutes) instead of fixed weekday/UTC
+  hours. A `MarketCalendarOutdated` alert covers the end of the file. promtool now runs in CI.
+
+**Load testing:**
+- `tools/loadtest.py` and `make loadtest`. Results are in `docs/load-testing.md`.
+- At 200 connections × 4 charts (800 subscriptions): all connected, no errors, delivery lag p99 70 ms,
+  engine p99 0.25 ms, about 0.3 MB per connection.
+- The first run found and fixed two problems in the stream hub:
+  - the push loop drifted (it slept after each push instead of keeping a fixed cadence)
+  - every connection re-encoded the same snapshot (now encoded once per distinct snapshot)
+- Result: delivery went from 1.74 to 1.85 per second against 2 nominal, lag p99 from 117 to 70 ms, and
+  data volume fell 15%.
+
+**Legacy retired:**
+- Removed:
+  - pages `/`, `/chart`, `/replay`, plus `static/`
+  - sockets `/ws/frontend` and `/ws/chart`, and their broadcast loop
+  - `/api/status`, `/api/contracts`, `/api/contract`, `/api/replay/*`
+  - `LegacyAuthGuard` and the `AUTH_REQUIRED` setting
+- `server.py` went from about 990 lines to 561.
+- Redirects (308): the old pages go to `/app/`, and `/reset-password` and `/verify-email` go to their new
+  `/app/` pages, keeping the token, so emails already sent still work.
+- Ported:
+  - create account, forgot password, reset password and verify email, into the Next.js terminal; email
+    links now point to `/app/...`
+  - contract switching: `POST /api/v1/admin/contract` (`admin.system`, audited) and **Make live** in the
+    watchlist for admins
+- The per-candle table moved to `domain/orderflow/table.py: candle_table`. The golden regression
+  baselines still match byte for byte.
+- The nginx image no longer copies legacy HTML; the CSP hashes cover only the terminal.
+
+**Verified:**
+- ruff clean; backend tests pass with the database.
+- Frontend: typecheck, ESLint and 27 unit tests.
+- 10 Playwright tests, including legacy redirects, forgot password, and reset/verify links with invalid
+  and missing tokens.
+
+**Still open:**
+- In-app alert fan-out across API processes (Redis pub/sub), needed before running more than one.
+- Image signing, off-site backup automation, replay across a mid-day contract switch.
+- Measure capacity on the production host (Linux, uvloop).

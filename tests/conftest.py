@@ -12,4 +12,3 @@ def default_runtime_config(monkeypatch):
     monkeypatch.setattr(config, "INGEST_MODE", "embedded")
     monkeypatch.setattr(config, "MARKET_DATA_PROVIDER", "angelone")
     monkeypatch.setattr(config, "SYNTHETIC_FEED", False)
-    monkeypatch.setattr(config, "AUTH_REQUIRED", False)

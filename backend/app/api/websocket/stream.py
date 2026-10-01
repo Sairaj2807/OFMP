@@ -117,6 +117,15 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+class Encoded(str):
+    """A payload already serialized to JSON: a snapshot shared by many
+    subscribers is encoded once per push, not once per connection."""
+
+
+def encode(payload) -> Encoded:
+    return Encoded(json.dumps(payload, default=str, separators=(",", ":")))
+
+
 class StreamConnection:
     def __init__(self, ws: WebSocket, user, token: str):
         self.ws, self.user, self.token = ws, user, token
@@ -130,13 +139,11 @@ class StreamConnection:
         self._send_lock = asyncio.Lock()
 
     async def send(self, type_: str, data=None, sub_id: Optional[str] = None) -> None:
-        msg = {"type": type_, "seq": 0, "ts": 0, "data": data}
-        if sub_id is not None:
-            msg["id"] = sub_id
+        body = data if isinstance(data, Encoded) else json.dumps(data, default=str)
+        sid = f',"id":{json.dumps(sub_id)}' if sub_id is not None else ""
         async with self._send_lock:
             self.seq += 1
-            msg["seq"], msg["ts"] = self.seq, _now_ms()
-            await self.ws.send_text(json.dumps(msg, default=str))
+            await self.ws.send_text(f'{{"type":"{type_}","seq":{self.seq},"ts":{_now_ms()}{sid},"data":{body}}}')
         metrics.WS_MESSAGES.labels(type_).inc()
 
     def offer_snapshot(self, sub_id: str, payload: dict) -> None:
@@ -362,12 +369,12 @@ class StreamHub:
 
     def push_once(self) -> None:
         """Build each distinct subscription's snapshot once and offer it to its subscribers."""
-        cache = {}
+        cache = {}      # (ppr, interval) -> snapshot, built and JSON-encoded once per push
         metrics.WS_SUBSCRIPTIONS.set(sum(len(c.ids()) for c in self.connections))
         for conn in list(self.connections):
             for sub_id, settings in list(conn.subscriptions.items()):
                 if settings not in cache:
-                    cache[settings] = self.gateway.chart_snapshot(*settings)
+                    cache[settings] = encode(self.gateway.chart_snapshot(*settings))
                 conn.offer_snapshot(sub_id, cache[settings])
             for sub_id, entry in list(conn.replays.items()):
                 session = entry["session"]
@@ -391,9 +398,17 @@ class StreamHub:
                 log.debug("heartbeat failed: %r", e)
 
     async def run(self) -> None:
+        # fixed cadence: the push period stays push_interval_sec however long a push takes
+        # (sleeping a fixed time after each push would stretch it as load grows)
         next_heartbeat = time.monotonic() + self.heartbeat_sec
+        next_push = time.monotonic()
         while True:
-            await asyncio.sleep(self.push_interval_sec)
+            next_push += self.push_interval_sec
+            delay = next_push - time.monotonic()
+            if delay < 0:                       # overloaded: skip the missed slots, never burst
+                next_push = time.monotonic()
+                delay = 0
+            await asyncio.sleep(delay)
             try:
                 self.push_once()
                 if time.monotonic() >= next_heartbeat:

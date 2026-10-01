@@ -2,15 +2,32 @@
 
 import { useEffect, useState } from "react";
 
+import { ApiError, api } from "@/lib/api";
 import { price } from "@/lib/format";
 import { snapshotBus } from "@/lib/snapshots";
 import { useSession } from "@/stores/session";
 import { useTerminal } from "@/stores/terminal";
 
-/** Contracts of the configured underlying. The active (streaming) one shows live figures. */
+/** Contracts of the configured underlying. The active (streaming) one shows live figures;
+ *  an admin (admin.system) can make another one live for everybody. */
 export function Watchlist() {
   const contracts = useSession((s) => s.contracts);
   const symbol = useSession((s) => s.feed.symbol);
+  const canSwitch = useSession((s) => s.user?.permissions?.includes("admin.system") ?? false);
+  const [switching, setSwitching] = useState<string | null>(null);
+
+  const makeLive = async (token: string, tradingsymbol: string) => {
+    if (!window.confirm(`Make ${tradingsymbol} the live contract for every user? The live footprint restarts.`)) return;
+    setSwitching(token);
+    try {
+      await api.switchContract(token);
+      useSession.getState().setNotice(`${tradingsymbol} is now live`);
+    } catch (e) {
+      useSession.getState().setNotice(`Could not switch: ${e instanceof ApiError ? e.message : "server unreachable"}`);
+    } finally {
+      setSwitching(null);
+    }
+  };
   const activeChartId = useTerminal((s) => s.activeChartId);
   const [quote, setQuote] = useState<{ ltp: number; change: number | null } | null>(null);
 
@@ -39,6 +56,13 @@ export function Watchlist() {
               <div className="flex items-baseline justify-between gap-2">
                 <span className="num text-[12px] text-fg">{c.tradingsymbol}</span>
                 {active && <span className="text-[10px] uppercase tracking-wide text-accent">live</span>}
+                {!active && canSwitch && c.token && (
+                  <button type="button" disabled={switching !== null} onClick={() => void makeLive(c.token!, c.tradingsymbol)}
+                          className="rounded px-1 text-[10px] uppercase tracking-wide text-fg-2 hover:bg-raised hover:text-fg disabled:opacity-40"
+                          aria-label={`Make ${c.tradingsymbol} live`}>
+                    {switching === c.token ? "Switching…" : "Make live"}
+                  </button>
+                )}
               </div>
               <div className="flex items-baseline justify-between text-[11px] text-muted">
                 <span>{c.expiry ? `exp ${c.expiry}` : ""}</span>

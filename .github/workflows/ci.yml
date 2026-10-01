@@ -107,6 +107,8 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - run: docker build --target runtime -t ofmp-backend:ci .
       - run: docker build -f deploy/nginx/Dockerfile -t ofmp-nginx:ci .
+      - name: Prometheus alert rules (promtool, same version as the stack)
+        run: docker run --rm -v "$PWD/deploy/prometheus:/p:ro" --entrypoint promtool prom/prometheus:v2.55.1 check rules /p/alerts.yml
       - name: Image vulnerabilities (Trivy, fixable HIGH/CRITICAL)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with: { image-ref: "ofmp-backend:ci", severity: "HIGH,CRITICAL", ignore-unfixed: true, exit-code: "1" }

@@ -1,6 +1,6 @@
 // Builds the Content-Security-Policy header from the HTML actually shipped:
-// every inline <script> (Next.js bootstrap payloads, the legacy account
-// pages) is allowed by its SHA-256 hash, so script-src needs no
+// every inline <script> (the Next.js bootstrap payloads) is allowed by its
+// SHA-256 hash, so script-src needs no
 // 'unsafe-inline'. Run at image build time; writes an nginx include.
 //
 //   node csp-hashes.mjs <out.conf> <html files...>

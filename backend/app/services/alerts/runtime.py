@@ -5,7 +5,8 @@ classified trade of the active contract. It is synchronous and cheap: it
 evaluates the in-memory rules and puts firings on a bounded queue; nothing in
 it waits on the database or the network. run() drains the queue:
 
-  1. per-user rate limit (MAX_PER_USER_PER_MIN deliveries a minute; over the
+  1. per-user rate limit (MAX_PER_USER_PER_MIN deliveries a minute, shared by
+     all API processes when the limiters are Redis-backed; over the
      limit the event is still recorded, marked suppressed="rate_limited");
   2. record the event (idempotent on (rule, dedup_key): a duplicate stops here);
   3. deliver in-app (open terminals), then to the rule's webhooks concurrently.
@@ -25,28 +26,29 @@ import time
 from typing import Callable, Optional
 
 from backend.app.core import metrics
-from backend.app.core.ratelimit import SlidingWindowLimiter
+from backend.app.core.ratelimit import LIMITS, SlidingWindowLimiter
 from backend.app.domain.alerts import AlertEvaluator, AlertRule, CandleCloseDetector, TradeObservation
 
 from .service import AlertService, event_public
 
 log = logging.getLogger(__name__)
 
-MAX_PER_USER_PER_MIN = 20
+MAX_PER_USER_PER_MIN = LIMITS["alert_delivery"][0]
 QUEUE_SIZE = 10_000
 MAX_CONCURRENT_WEBHOOKS = 10
 
 
 class AlertRuntime:
     def __init__(self, service: AlertService, in_app, providers: dict, reload_sec: float = 30.0,
-                 prune_every_sec: float = 3600.0, clock: Callable[[], float] = time.monotonic):
+                 prune_every_sec: float = 3600.0, clock: Callable[[], float] = time.monotonic, limiter=None):
         self.service = service
         self.in_app = in_app
         self.providers = providers               # channel kind -> NotificationProvider
         self.reload_sec, self.prune_every_sec = reload_sec, prune_every_sec
         self.evaluator = AlertEvaluator()
         self.detector = CandleCloseDetector()
-        self.limiter = SlidingWindowLimiter(MAX_PER_USER_PER_MIN, 60, clock=clock)
+        # per-user delivery limit; the app passes its shared (Redis-backed in production) limiter
+        self.limiter = limiter or SlidingWindowLimiter(MAX_PER_USER_PER_MIN, 60, clock=clock)
         self.queue: asyncio.Queue = asyncio.Queue(QUEUE_SIZE)
         self.symbol: Optional[str] = None
         self._webhook_slots = asyncio.Semaphore(MAX_CONCURRENT_WEBHOOKS)
@@ -94,7 +96,7 @@ class AlertRuntime:
     # -- dispatch ------------------------------------------------------------------
 
     async def dispatch(self, firing, symbol: Optional[str]) -> Optional[dict]:
-        allowed, _ = self.limiter.hit(firing.owner_user_id)
+        allowed, _ = await self.limiter.hit(firing.owner_user_id)
         row = await self.service.record_firing(firing, symbol, suppressed=None if allowed else "rate_limited")
         if row is None:
             return None                          # already recorded (another process, or a duplicate)

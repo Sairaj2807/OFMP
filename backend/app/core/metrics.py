@@ -49,6 +49,14 @@ ALERTS_DROPPED = Counter("ofmp_alerts_dropped_total", "Firings dropped because t
 ALERT_DELIVERIES = Counter("ofmp_alert_deliveries_total", "Alert deliveries by channel and outcome",
                            ["channel", "outcome"])
 
+MARKET_SESSION_OPEN = Gauge("ofmp_market_session_open",
+                            "1 while the exchange is in a trading session (holiday calendar applied)")
+MARKET_CALENDAR_DAYS_LEFT = Gauge("ofmp_market_calendar_days_left",
+                                  "Days until the end of the last year the holiday calendar covers")
+
+RATELIMIT_FALLBACKS = Counter("ofmp_ratelimit_fallbacks_total",
+                              "Rate-limit checks that fell back to in-process limits because Redis failed")
+
 HTTP_REQUESTS = Counter("ofmp_http_requests_total", "HTTP requests", ["method", "route", "status"])
 HTTP_LATENCY = Histogram("ofmp_http_request_duration_seconds", "HTTP request latency", ["method", "route"],
                          buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5))

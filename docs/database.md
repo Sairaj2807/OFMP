@@ -61,11 +61,12 @@ so an extra index would only cost writes.
 - **Database down:** rows stay buffered and are retried. Past 500,000 rows per table, the oldest are
   dropped and counted.
 - JSONL is still written alongside during the dual-write period, as the fallback.
-- Stats (written / pending / dropped / last error) appear under `database` in `GET /api/status`.
+- Stats (written / pending / dropped / last error) appear under `database_writer` in
+  `GET /api/v1/admin/system`.
 
 ## Session restore
 
-When a contract is activated (startup or `/api/contract`), the server:
+When a contract is activated (startup or `POST /api/v1/admin/contract`), the server:
 1. upserts the instrument;
 2. loads today's trades for that contract (time, price, qty, side, plus the last trade's depth);
 3. rebuilds footprint, candle rollover, CVD and the trade tape with `orderflow.restore_trades`;

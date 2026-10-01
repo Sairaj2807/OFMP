@@ -87,7 +87,7 @@ Rebuilding the in-progress session from stored ticks is Phase 3 work.
   - subscriptions
   - counters
 
-  It is exposed as `feed` in `GET /api/status`.
+  It is exposed as `feed` in `GET /api/v1/market/status` and `GET /api/v1/admin/system`.
 
 ## Data quality
 

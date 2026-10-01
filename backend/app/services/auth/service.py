@@ -164,7 +164,7 @@ class AuthService:
             if existing is not None:
                 await self._audit(conn, "user.register_duplicate", info, target_type="user", target_id=existing.id)
                 notice = ("Someone tried to create an account with this email address. If it was you, "
-                          f"sign in or reset your password at {self.base_url}/login.")
+                          f"sign in or reset your password at {self.base_url}/app/login/.")
                 token = None
             else:
                 user_id = (await conn.execute(users.insert().values(
@@ -178,7 +178,7 @@ class AuthService:
                 await self._audit(conn, "user.register", info, actor=user_id, target_type="user", target_id=user_id)
         if token:
             await self.email.send(email, "Verify your email",
-                                  f"Confirm your email address: {self.base_url}/verify-email?token={token}")
+                                  f"Confirm your email address: {self.base_url}/app/verify-email/?token={token}")
         else:
             await self.email.send(email, "Account already exists", notice)
 
@@ -196,7 +196,7 @@ class AuthService:
         async with self.engine.begin() as conn:
             token = await self._issue_email_token(conn, user.id, "verify_email", VERIFY_TOKEN_TTL)
         await self.email.send(user.email, "Verify your email",
-                              f"Confirm your email address: {self.base_url}/verify-email?token={token}")
+                              f"Confirm your email address: {self.base_url}/app/verify-email/?token={token}")
 
     # -- login, refresh, logout ------------------------------------------------------
 
@@ -309,7 +309,7 @@ class AuthService:
             token = await self._issue_email_token(conn, row.id, "reset_password", RESET_TOKEN_TTL)
             await self._audit(conn, "auth.password_reset_requested", info, actor=row.id)
         await self.email.send(email, "Reset your password",
-                              f"Reset your password (valid 1 hour): {self.base_url}/reset-password?token={token}")
+                              f"Reset your password (valid 1 hour): {self.base_url}/app/reset-password/?token={token}")
 
     async def reset_password(self, token: str, new_password: str, info: RequestInfo) -> None:
         problem = validate_password_strength(new_password)

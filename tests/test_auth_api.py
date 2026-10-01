@@ -66,7 +66,7 @@ def env():
     """(client, outbox, service) on a fresh app wired to the test database."""
     app = FastAPI()
     configure_api(app, environment="development", cookie_secure=False, cors_origins=[],
-                  max_request_bytes=100_000, legacy_auth_required=False)
+                  max_request_bytes=100_000)
     outbox = MemoryEmailSender()
     engine = create_engine(TEST_DATABASE_URL)
     svc = AuthService(engine, SECRET, outbox, "http://testserver")
@@ -111,7 +111,7 @@ def test_register_verify_login_me(env):
     r = client.post("/api/v1/auth/register", json={"email": "Trader@Example.com", "password": PASSWORD,
                                                     "display_name": "T"})
     assert r.status_code == 202
-    assert outbox[-1]["to"] == "trader@example.com" and "verify-email?token=" in outbox[-1]["body"]
+    assert outbox[-1]["to"] == "trader@example.com" and "/app/verify-email/?token=" in outbox[-1]["body"]
     assert client.post("/api/v1/auth/verify-email", json={"token": token_from(outbox[-1])}).status_code == 204
     assert client.post("/api/v1/auth/verify-email", json={"token": token_from(outbox[-1])}).json()["error"]["code"] == "INVALID_TOKEN"
 
@@ -261,7 +261,27 @@ def test_admin_endpoints_require_permission(env):
     rest = admin.get(f"/api/v1/admin/users?cursor={page['next_cursor']}").json()
     assert [u["email"] for u in rest["data"]] == ["user@example.com"] and rest["next_cursor"] is None
     assert admin.get("/api/v1/admin/system").json()["database"] == "ok"
-    assert admin.get("/api/v1/market/status").json()["contract"]["tradingsymbol"] == "NIFTY27OCT26FUT"
+    status = admin.get("/api/v1/market/status").json()
+    assert status["contract"]["tradingsymbol"] == "NIFTY27OCT26FUT"
+    assert status["session"]["exchange"] == "NSE" and isinstance(status["session"]["open"], bool)
+
+
+def test_contract_switch_needs_admin_system_and_is_audited(env):
+    client, _, svc = env
+    register_and_login(client, "user@example.com")
+    client.headers["X-CSRF-Token"] = client.cookies.get("ofmp_csrf")
+    denied = client.post("/api/v1/admin/contract", json={"token": "2"})
+    assert denied.status_code == 403 and denied.json()["error"]["code"] == "FORBIDDEN"
+    client.portal.call(svc.create_user, "root@example.com", PASSWORD, "super_admin", None)
+    root = browser(client)
+    root.post("/api/v1/auth/login", json={"email": "root@example.com", "password": PASSWORD})
+    root.headers["X-CSRF-Token"] = root.cookies.get("ofmp_csrf")
+    r = root.post("/api/v1/admin/contract", json={"token": "2"})
+    assert r.status_code == 200 and r.json()["contract"]["tradingsymbol"] == "NIFTY24NOV26FUT"
+    bad = root.post("/api/v1/admin/contract", json={"token": "999"})
+    assert bad.status_code == 422 and bad.json()["error"]["code"] == "UNKNOWN_CONTRACT"
+    rows = run(_sql("SELECT target_id, details FROM audit_logs WHERE action = 'contract.switch'"))
+    assert [tuple(r) for r in rows] == [("NIFTY24NOV26FUT", {"from": "NIFTY27OCT26FUT"})]
 
 
 def test_login_rate_limit_per_account(env):
