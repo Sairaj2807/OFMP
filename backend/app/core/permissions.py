@@ -9,14 +9,14 @@ PERMISSIONS = {
     "market.read",        # live and historical market data, charts, replay
     "chart.read", "chart.write",
     "workspace.read", "workspace.write",
-    "alerts.create", "alerts.delete",
+    "alerts.read", "alerts.create", "alerts.delete",
     "admin.users",        # list/inspect users, sessions
     "admin.data",         # data quality, ingestion
     "admin.system",       # providers, system health, dangerous operations
 }
 
 _USER = {"market.read", "chart.read", "chart.write", "workspace.read", "workspace.write",
-         "alerts.create", "alerts.delete"}
+         "alerts.read", "alerts.create", "alerts.delete"}
 
 ROLE_PERMISSIONS = {
     "user": frozenset(_USER),

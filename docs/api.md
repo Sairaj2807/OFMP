@@ -134,6 +134,66 @@ and delete go to `audit_logs`.
 sessions available for replay. Trades come from the database when it is configured, otherwise from the
 JSONL session folders.
 
+## Alerts
+
+A user's alert rules run against **live** data for the active contract. They never run during replay,
+nor on the trades restored at startup. Permissions: `alerts.read`, `alerts.create`, `alerts.delete`.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/alerts/kinds` | condition kinds, intervals, cooldown range, limits (for building a form) |
+| GET | `/api/v1/alerts/rules` | your rules |
+| POST | `/api/v1/alerts/rules` | `{name, kind, params, mode?, cooldown_sec?, channel_ids?, enabled?}` → 201 |
+| GET | `/api/v1/alerts/rules/{id}` | one rule |
+| PATCH | `/api/v1/alerts/rules/{id}` | `{revision, ...changes}`; `enabled: false` pauses it; a `kind` change needs `params` |
+| DELETE | `/api/v1/alerts/rules/{id}` | soft delete |
+| GET | `/api/v1/alerts/events?limit=&before=&unread=` | history, newest first (`before` = an event id, for paging) |
+| GET | `/api/v1/alerts/events/unread-count` | `{unread}` |
+| POST | `/api/v1/alerts/events/read` | `{ids?}`; omit `ids` to mark everything read |
+| GET | `/api/v1/alerts/channels` | your webhooks |
+| POST | `/api/v1/alerts/channels` | `{name, url}` → 201 with `secret`, **shown only this once** |
+| DELETE | `/api/v1/alerts/channels/{id}` | also removed from every rule that used it |
+| POST | `/api/v1/alerts/channels/{id}/test` | a signed test delivery; 10 per hour |
+
+**Conditions** (`kind` and its `params`):
+
+| kind | params | fires when |
+|---|---|---|
+| `price_above` / `price_below` | `level` | the last traded price crosses the level |
+| `cvd_above` / `cvd_below` | `level` | session CVD (closed and forming candles) crosses the level |
+| `candle_delta_above` / `candle_delta_below` | `level`, `interval` | a closed candle's delta is ≥ / ≤ the level |
+| `candle_volume_above` | `level`, `interval` | a closed candle's volume is ≥ the level |
+| `stacked_imbalance` | `interval`, `side` (buy, sell, any) | a closed candle has a stacked imbalance (the engine's rule: ratio 3, stack 3) |
+| `value_area_break` | `interval`, `side` (up, down, any) | a candle closes above the previous candle's VAH, or below its VAL |
+
+- **Crossings.** A trade condition fires on a crossing. The first trade after a rule is loaded only
+  records which side of the level the market is on, so a new rule never fires on the state it was
+  created in.
+- **Candle closes.** A candle condition is checked when the candle closes, which is known on the first
+  trade of the next candle (the same moment the chart shows it closed). Candles are grouped exactly as
+  on the chart.
+- **`mode`.** `repeat` (default) can fire again after `cooldown_sec` (10 s to 24 h, default 300) of
+  market time. `once` pauses the rule after it fires.
+
+**Delivery:**
+- **In-app.** An `alert` message on every open `/ws/v1/stream` connection of the owner.
+- **Webhooks.** A rule's `channel_ids` also get a POST of `{"type":"alert.fired", id, rule_id, rule_name,
+  kind, message, value, symbol, fired_at, details}`.
+  - Verify `X-OFMP-Signature: sha256=HMAC_SHA256(secret, "<X-OFMP-Timestamp>.<body>")`, and reject old
+    timestamps. `X-OFMP-Event-Id` identifies the event.
+  - In production, webhooks must be `https` on public addresses. The host is resolved and checked on
+    every delivery, and the request goes to the checked address. Redirects are not followed.
+  - 5 s timeout; up to 3 attempts on network errors, 5xx or 429.
+
+**Guarantees and limits:**
+- An event is recorded once per rule and market event (unique on `(rule_id, dedup_key)`), so a second
+  API process evaluating the same tape cannot deliver it twice.
+- At most 20 deliveries per user per minute. Beyond that, events are still recorded, with
+  `suppressed: "rate_limited"`.
+- 50 rules and 5 webhooks per user. History is kept for 90 days.
+- Ownership is checked like workspaces: another user's rule, channel or event is `404 NOT_FOUND`.
+- Rule and channel creates and deletes are audited.
+
 ## Real-time stream: `/ws/v1/stream`
 
 **Authenticating.** Use the `ofmp_access` cookie. Clients without cookies instead send
@@ -148,7 +208,8 @@ JSONL session folders.
 - `{"action":"ping"}` / `{"action":"pong"}`
 
 **Server → client messages** have the form `{"type","seq","ts","data"}`:
-- `type` is one of `welcome`, `subscribed`, `snapshot`, `ping`, `pong`, `unsubscribed`, `error`.
+- `type` is one of `welcome`, `subscribed`, `snapshot`, `ping`, `pong`, `unsubscribed`, `error`, and
+  `alert` (one of your alert rules fired; sent without any subscription).
 - `seq` goes up by one per message on the connection.
 - `ts` is server time in epoch ms.
 

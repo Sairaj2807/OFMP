@@ -19,6 +19,8 @@ Protocol (JSON text frames):
 
   server -> client: {"type": ..., "seq": n, "ts": <server epoch ms>, "id"?: <subscription id>, "data": ...}
     welcome | subscribed | replay_started | unsubscribed | snapshot | ping | pong | error
+    alert         one of the user's alert rules fired (data = the alert event); sent to every
+                  open connection of that user, no subscription needed
   Replay snapshots carry data.replay = {date, start_ms, end_ms, cursor_ms, index, total, playing, speed, speeds}.
 
 Guarantees and limits:
@@ -341,6 +343,20 @@ class StreamHub:
             await conn.send("error", {"code": "INVALID_CONTROL", "message": str(e)}, msg.id)
             return
         conn.offer_snapshot(msg.id, self.gateway.replay_snapshot(session, entry["ppr"], entry["interval"]))
+
+    # -- user notifications -----------------------------------------------------------------
+
+    async def notify_user(self, user_id: str, type_: str, data) -> bool:
+        """Sends one message to every open connection of `user_id` (alerts).
+        True if at least one connection received it."""
+        sent = False
+        for conn in [c for c in self.connections if str(c.user.id) == str(user_id)]:
+            try:
+                await asyncio.wait_for(conn.send(type_, data), timeout=2.0)
+                sent = True
+            except Exception as e:              # a broken or stalled socket is cleaned up by its own handler
+                log.debug("notify failed: %r", e)
+        return sent
 
     # -- background loops ------------------------------------------------------------------
 

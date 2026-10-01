@@ -2,7 +2,10 @@
 // automatically; this code never sees them. Unsafe requests echo the
 // ofmp_csrf cookie in X-CSRF-Token (double-submit). An expired access token
 // is refreshed once, transparently, then the request is retried.
-import type { Contract, ReplaySessionInfo, User, Workspace, WorkspaceSummary } from "./types";
+import type {
+  AlertChannel, AlertEvent, AlertKinds, AlertRule, AlertRuleInput, Contract, ReplaySessionInfo, User, Workspace,
+  WorkspaceSummary,
+} from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -92,6 +95,23 @@ export class ApiClient {
   duplicateWorkspace = (id: string, name: string) =>
     this.request<Workspace>("POST", `/api/v1/workspaces/${encodeURIComponent(id)}/duplicate`, { name });
   deleteWorkspace = (id: string) => this.request<void>("DELETE", `/api/v1/workspaces/${encodeURIComponent(id)}`);
+
+  alertKinds = () => this.request<AlertKinds>("GET", "/api/v1/alerts/kinds");
+  alertRules = () => this.request<AlertRule[]>("GET", "/api/v1/alerts/rules");
+  createAlertRule = (rule: AlertRuleInput) => this.request<AlertRule>("POST", "/api/v1/alerts/rules", rule);
+  updateAlertRule = (id: string, revision: number, patch: Partial<AlertRuleInput> & { enabled?: boolean }) =>
+    this.request<AlertRule>("PATCH", `/api/v1/alerts/rules/${encodeURIComponent(id)}`, { revision, ...patch });
+  deleteAlertRule = (id: string) => this.request<void>("DELETE", `/api/v1/alerts/rules/${encodeURIComponent(id)}`);
+  alertEvents = (limit = 50) => this.request<AlertEvent[]>("GET", `/api/v1/alerts/events?limit=${limit}`);
+  alertUnreadCount = () => this.request<{ unread: number }>("GET", "/api/v1/alerts/events/unread-count");
+  markAlertsRead = (ids?: number[]) =>
+    this.request<{ updated: number }>("POST", "/api/v1/alerts/events/read", ids ? { ids } : {});
+  alertChannels = () => this.request<AlertChannel[]>("GET", "/api/v1/alerts/channels");
+  createAlertChannel = (name: string, url: string) =>
+    this.request<AlertChannel & { secret: string }>("POST", "/api/v1/alerts/channels", { name, url });
+  deleteAlertChannel = (id: string) => this.request<void>("DELETE", `/api/v1/alerts/channels/${encodeURIComponent(id)}`);
+  testAlertChannel = (id: string) =>
+    this.request<{ ok: boolean; error: string | null }>("POST", `/api/v1/alerts/channels/${encodeURIComponent(id)}/test`);
 
   marketStatus = () =>
     this.request<{ contract: Contract | null; feed: { connected: boolean; error?: string | null } | null }>(

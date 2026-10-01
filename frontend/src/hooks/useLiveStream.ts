@@ -10,6 +10,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { api } from "@/lib/api";
 import { snapshotBus } from "@/lib/snapshots";
+import { alertActions } from "./useAlerts";
 import { StreamClient, defaultStreamUrl } from "@/lib/stream";
 import type { ReplayMeta } from "@/lib/types";
 import { useSession } from "@/stores/session";
@@ -70,6 +71,7 @@ export function useLiveStream(enabled: boolean): void {
           useSession.getState().setNotice(`Replay unavailable: ${message}`);
         }
       },
+      onAlert: (event) => alertActions.receive(event),
       onUnauthenticated: () => api.refresh(),
     });
     streamRef.current = c;

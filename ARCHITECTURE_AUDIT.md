@@ -922,7 +922,79 @@ Done on 2026-09-30.
   cleared before reload, to prove it is server-side)
 
 **Still open:**
-- Alerts (next phase).
+- Alerts (Phase 8, below).
 - Replay across contract switches within one day (a session is replayed as a whole).
 - Sharing workspaces within an organization.
 - Workspace history / undo.
+
+## 22. Phase 8 status (alerts)
+
+Done on 2026-10-01.
+
+**Domain** (`backend/app/domain/alerts`, pure, no I/O):
+- Nine condition kinds:
+  - trade conditions (price and CVD crossings)
+  - candle-close conditions (delta, volume, stacked imbalance by the engine's rule, value-area break)
+- Validation rejects unknown parameters.
+- Crossing semantics: a newly loaded rule arms first and never fires on stale state.
+- Cooldown is measured in market time, so the same tape always produces the same firings.
+- `once` / `repeat` modes.
+- `CandleCloseDetector` groups native candles exactly like the chart. A test checks every closed candle
+  against the chart's own grouped bars (delta, volume, OHLC) at 1, 5 and 15 minutes.
+
+**Persistence:**
+- Migration `0004` adds `alert_rules`, `alert_events` and `notification_channels`.
+- Events are unique on `(rule_id, dedup_key)`, so recording is idempotent: a firing is delivered once
+  even if several API processes evaluate the same trade.
+
+**Runtime** (`services/alerts/runtime.py`):
+- Called on the tick path for each classified live trade. It is synchronous and cheap: evaluate, then
+  put firings on a bounded queue.
+- A background task records each firing, applies the per-user rate limit (20 a minute; over that, events
+  are recorded as suppressed), and delivers in-app, then to webhooks concurrently.
+- Rules update in place on API changes and fully reload every 30 s.
+- Market state resets on a contract switch.
+- Not evaluated in replay or for the startup restore.
+
+**Delivery** (`services/alerts/delivery.py`):
+- A `NotificationProvider` interface with in-app (stream `alert` message) and webhook implementations.
+- Webhooks are HMAC-signed. The secret is derived from the server secret and channel id (never stored)
+  and shown once.
+- SSRF controls:
+  - https and public addresses only in production
+  - every resolved address is checked
+  - the request is pinned to the checked IP, keeping Host and SNI, which defeats DNS rebinding
+  - redirects are not followed
+- 5 s timeout; 3 attempts on network errors, 5xx and 429.
+
+**API and UI:**
+- `/api/v1/alerts` (rules, events, channels, test delivery) with the new `alerts.read` permission.
+  Ownership is checked like workspaces, with optimistic concurrency, limits and an audit trail.
+- Terminal: an Alerts button with unread count; History, Rules (create, pause, delete) and Webhooks tabs;
+  toasts; opt-in desktop notifications; an "Open alerts" command.
+
+**Operations:**
+- Metrics:
+  - `ofmp_alert_rules_active`
+  - `ofmp_alerts_fired_total`
+  - `ofmp_alerts_suppressed_total`
+  - `ofmp_alerts_dropped_total`
+  - `ofmp_alert_deliveries_total`
+- Prometheus alerts for webhook failures and dropped firings.
+- `httpx` moved to the runtime requirements.
+
+**Verified:**
+- 336 backend tests with the database, including the trade → event → in-app and signed-webhook path,
+  duplicate suppression, the rate limit, once rules disabling themselves, and ownership.
+- 27 frontend unit tests.
+- 9 Playwright tests, including a price rule created in the UI firing on live data (toast, history,
+  unread count) and the webhook secret flow.
+- A live smoke test on the synthetic feed: rules fired over the WebSocket, the webhook signature
+  verified with the shown secret, and the metrics counted the firings.
+
+**Still open:**
+- Email and Telegram providers (the interface is ready).
+- Rules for a specific contract (rules currently follow the active contract).
+- Rate limits are per process (Redis-backed limits are already an open item).
+- Alerts on order-book conditions (e.g. book imbalance), and per-user time windows (e.g. market hours
+  only).

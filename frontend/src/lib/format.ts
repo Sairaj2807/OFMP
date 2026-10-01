@@ -26,3 +26,14 @@ export function istTime(epochSec: number): string {
 export function intervalLabel(sec: number): string {
   return sec % 3600 === 0 ? `${sec / 3600}h` : `${sec / 60}m`;
 }
+
+/** "14:05:09" for today, "29 Sep 14:05" otherwise, in IST. */
+export function istDateTime(iso: string, now: Date = new Date()): string {
+  const d = new Date(iso);
+  const day = (x: Date) => x.toLocaleDateString("en-GB", { timeZone: IST });
+  if (day(d) === day(now)) {
+    return d.toLocaleTimeString("en-GB", { timeZone: IST, hour12: false });
+  }
+  return d.toLocaleString("en-GB", { timeZone: IST, hour12: false, day: "2-digit", month: "short", hour: "2-digit",
+                                      minute: "2-digit" });
+}

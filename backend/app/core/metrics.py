@@ -42,6 +42,13 @@ DB_ROWS_DROPPED = Counter("ofmp_db_rows_dropped_total", "Rows dropped because th
 DB_ROWS_PENDING = Gauge("ofmp_db_rows_pending", "Rows buffered, waiting to be written", ["table"])
 DB_WRITE_ERRORS = Counter("ofmp_db_write_errors_total", "Failed writer flushes")
 
+ALERT_RULES_ACTIVE = Gauge("ofmp_alert_rules_active", "Enabled alert rules loaded in the live evaluator")
+ALERTS_FIRED = Counter("ofmp_alerts_fired_total", "Alert rules that fired (before dedup and rate limits)", ["kind"])
+ALERTS_SUPPRESSED = Counter("ofmp_alerts_suppressed_total", "Recorded alerts that were not delivered", ["reason"])
+ALERTS_DROPPED = Counter("ofmp_alerts_dropped_total", "Firings dropped because the dispatch queue was full")
+ALERT_DELIVERIES = Counter("ofmp_alert_deliveries_total", "Alert deliveries by channel and outcome",
+                           ["channel", "outcome"])
+
 HTTP_REQUESTS = Counter("ofmp_http_requests_total", "HTTP requests", ["method", "route", "status"])
 HTTP_LATENCY = Histogram("ofmp_http_request_duration_seconds", "HTTP request latency", ["method", "route"],
                          buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5))

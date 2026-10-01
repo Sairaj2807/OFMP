@@ -160,4 +160,13 @@ describe("StreamClient replay", () => {
     client.replayControl("c1", "play");                                                 // no-op when live
     expect(socket().sent.at(-1)).toMatchObject({ action: "subscribe", id: "c1" });
   });
+
+  it("routes alert messages to onAlert without any subscription", () => {
+    const alerts: unknown[] = [];
+    const { client, socket } = setup({ onAlert: (e) => alerts.push(e) });
+    client.start();
+    socket().open();
+    socket().emit({ type: "alert", data: { id: 5, message: "Breakout: price crosses above 24500" } });
+    expect(alerts).toEqual([{ id: 5, message: "Breakout: price crosses above 24500" }]);
+  });
 });

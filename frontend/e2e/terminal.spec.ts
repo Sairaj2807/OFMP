@@ -151,3 +151,56 @@ test("workspaces: save as, autosave, persisted on the server, delete", async ({ 
   await page.getByRole("menuitem", { name: "Delete this workspace" }).click();
   await expect(page.getByRole("button", { name: /Workspace/ })).not.toContainText(name);
 });
+
+test("alerts: a price rule fires on live data, shows a toast and history, then is deleted", async ({ page }) => {
+  const probe = await page.request.get("/api/v1/alerts/rules");
+  test.skip(probe.status() === 503, "alerts need the database");
+  test.setTimeout(90_000);
+  // rules left by an earlier failed run would keep firing: remove them first
+  const csrf = (await page.context().cookies()).find((c) => c.name === "ofmp_csrf")?.value ?? "";
+  for (const r of (await probe.json()) as { id: string; name: string }[]) {
+    if (r.name.startsWith("E2E alert")) {
+      await page.request.delete(`/api/v1/alerts/rules/${r.id}`, { headers: { "X-CSRF-Token": csrf } });
+    }
+  }
+  await openTerminal(page);
+  await page.getByRole("button", { name: "1 chart" }).click();
+  await page.getByRole("region", { name: "Chart c1" }).getByRole("button", { name: "Live", exact: true }).click();
+  await expect(page.getByText("Waiting for the first trade…")).toBeHidden({ timeout: 15_000 });
+
+  await page.getByRole("button", { name: /^Alerts/ }).click();
+  const panel = page.getByRole("dialog", { name: "Alerts" });
+  await panel.getByRole("tab", { name: "webhooks" }).click();
+  await panel.getByLabel("Webhook name").fill("E2E hook");
+  await panel.getByLabel("Webhook URL").fill("http://127.0.0.1:9/e2e");
+  await panel.getByRole("button", { name: "Add" }).click();
+  await expect(panel.getByLabel("Signing secret")).toHaveText(/^[0-9a-f]{64}$/);
+  await panel.getByRole("button", { name: "I have copied it" }).click();
+  await panel.getByRole("button", { name: "Delete E2E hook" }).click();
+  await expect(panel.getByText("E2E hook")).toBeHidden();
+
+  // a rule at the current price: the live feed crosses it within seconds
+  const name = `E2E alert ${Date.now()}`;
+  await panel.getByRole("tab", { name: "rules" }).click();
+  await panel.getByRole("button", { name: "New alert" }).click();
+  const form = panel.getByRole("form", { name: "New alert" });
+  await form.getByLabel("Name").fill(name);
+  await expect(form.getByLabel("Level")).not.toHaveValue("");          // prefilled with the last price
+  await form.getByLabel("At most every (seconds)").fill("10");
+  await form.getByRole("button", { name: "Create alert" }).click();
+  await expect(panel.getByRole("listitem", { name: `Rule ${name}` })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  const toast = page.getByLabel("New alerts").getByRole("status").filter({ hasText: name });
+  await expect(toast.first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole("button", { name: /^Alerts, \d+ unread/ })).toBeVisible();
+  await toast.first().getByRole("button", { name: "Open alerts" }).click();
+  await expect(panel.getByRole("list", { name: "Alert history" })).toContainText(name);
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/alerts.png` });
+  await panel.getByRole("button", { name: "Mark all read" }).click();
+  await expect(page.getByRole("button", { name: "Alerts", exact: true })).toBeVisible();
+
+  await panel.getByRole("tab", { name: "rules" }).click();
+  await panel.getByRole("button", { name: `Delete ${name}` }).click();
+  await expect(panel.getByRole("listitem", { name: `Rule ${name}` })).toBeHidden();
+});

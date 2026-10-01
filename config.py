@@ -148,6 +148,12 @@ if ENVIRONMENT == "production" and SYNTHETIC_FEED:
 # METRICS_PORT on the ingest worker.
 METRICS_ENABLED = os.environ.get("METRICS_ENABLED", "1").lower() not in ("0", "false", "no")
 METRICS_PORT = int(os.environ.get("METRICS_PORT", 9108))
+# Alert webhooks may target http:// URLs and private/loopback addresses (a
+# receiver on your own machine). Development only: never in production.
+ALERT_WEBHOOKS_ALLOW_PRIVATE = os.environ.get(
+    "ALERT_WEBHOOKS_ALLOW_PRIVATE", "1" if ENVIRONMENT == "development" else "0").lower() not in ("0", "false", "no")
+if ENVIRONMENT == "production" and ALERT_WEBHOOKS_ALLOW_PRIVATE:
+    raise ValueError("ALERT_WEBHOOKS_ALLOW_PRIVATE is for development only")
 # Built frontend (cd frontend && npm run build), served at /app when present.
 FRONTEND_DIST = os.environ.get("FRONTEND_DIST", "frontend/out")
 

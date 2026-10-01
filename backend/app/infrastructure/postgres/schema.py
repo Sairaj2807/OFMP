@@ -260,3 +260,81 @@ workspaces = sa.Table(
     sa.Index("uq_workspaces_owner_name_active", "owner_user_id", "name", unique=True,
              postgresql_where=sa.text("deleted_at IS NULL")),
 )
+
+
+# ---------------------------------------------------------------------------
+# Alerts (migration 0004)
+# ---------------------------------------------------------------------------
+# alert_rules: a user's conditions (kind + validated params JSON, see
+# backend/app/domain/alerts/rules.py). alert_events: one row per firing;
+# UNIQUE (rule_id, dedup_key) makes recording idempotent, so a firing is
+# delivered once even if two processes evaluate the same trade.
+# notification_channels: where firings are delivered besides in-app (webhooks).
+# A webhook's signing secret is never stored: it is derived from the server
+# secret and the channel id (services/alerts/delivery.py).
+
+notification_channels = sa.Table(
+    "notification_channels", metadata,
+    sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
+    sa.Column("owner_user_id", UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    sa.Column("kind", sa.Text, nullable=False),
+    sa.Column("name", sa.Text, nullable=False),
+    sa.Column("config", JSONB, nullable=False),          # webhook: {"url": ...}
+    sa.Column("enabled", sa.Boolean, nullable=False, server_default=sa.true()),
+    sa.Column("last_status", sa.Text),                   # "ok" | "failed"
+    sa.Column("last_error", sa.Text),
+    sa.Column("last_delivery_at", sa.DateTime(timezone=True)),
+    sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=NOW),
+    sa.Column("deleted_at", sa.DateTime(timezone=True)),
+    sa.CheckConstraint("kind IN ('webhook')", name="kind_valid"),
+    sa.CheckConstraint("length(name) BETWEEN 1 AND 80", name="name_length"),
+    sa.Index("ix_notification_channels_owner_active", "owner_user_id",
+             postgresql_where=sa.text("deleted_at IS NULL")),
+)
+
+alert_rules = sa.Table(
+    "alert_rules", metadata,
+    sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
+    sa.Column("owner_user_id", UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    sa.Column("organization_id", UUID(as_uuid=True), sa.ForeignKey("organizations.id", ondelete="CASCADE"),
+              nullable=False),
+    sa.Column("name", sa.Text, nullable=False),
+    sa.Column("kind", sa.Text, nullable=False),
+    sa.Column("params", JSONB, nullable=False),
+    sa.Column("mode", sa.Text, nullable=False, server_default="repeat"),
+    sa.Column("cooldown_sec", sa.Integer, nullable=False, server_default="300"),
+    sa.Column("channel_ids", ARRAY(UUID(as_uuid=True)), nullable=False, server_default="{}"),
+    sa.Column("enabled", sa.Boolean, nullable=False, server_default=sa.true()),
+    sa.Column("revision", sa.Integer, nullable=False, server_default="1"),
+    sa.Column("fire_count", sa.Integer, nullable=False, server_default="0"),
+    sa.Column("last_fired_at", sa.DateTime(timezone=True)),
+    sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=NOW),
+    sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=NOW),
+    sa.Column("deleted_at", sa.DateTime(timezone=True)),
+    sa.CheckConstraint("length(name) BETWEEN 1 AND 80", name="name_length"),
+    sa.CheckConstraint("mode IN ('once', 'repeat')", name="mode_valid"),
+    sa.CheckConstraint("cooldown_sec BETWEEN 10 AND 86400", name="cooldown_range"),
+    sa.Index("ix_alert_rules_owner_active", "owner_user_id", postgresql_where=sa.text("deleted_at IS NULL")),
+    sa.Index("ix_alert_rules_enabled", "enabled", postgresql_where=sa.text("deleted_at IS NULL AND enabled")),
+)
+
+alert_events = sa.Table(
+    "alert_events", metadata,
+    sa.Column("id", sa.BigInteger, sa.Identity(), primary_key=True),
+    sa.Column("rule_id", UUID(as_uuid=True), sa.ForeignKey("alert_rules.id", ondelete="CASCADE"), nullable=False),
+    sa.Column("owner_user_id", UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    sa.Column("fired_at", sa.DateTime(timezone=True), nullable=False),      # market time of the trigger
+    sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False, server_default=NOW),
+    sa.Column("dedup_key", sa.Text, nullable=False),
+    sa.Column("kind", sa.Text, nullable=False),
+    sa.Column("symbol", sa.Text),
+    sa.Column("message", sa.Text, nullable=False),
+    sa.Column("value", sa.Float),
+    sa.Column("details", JSONB),
+    sa.Column("delivery", JSONB),                     # {"in_app": "sent", "<channel id>": "ok" | "failed: ..."}
+    sa.Column("suppressed", sa.Text),                 # set when not delivered (e.g. "rate_limited")
+    sa.Column("read_at", sa.DateTime(timezone=True)),
+    sa.UniqueConstraint("rule_id", "dedup_key"),
+    sa.Index("ix_alert_events_owner_fired", "owner_user_id", sa.text("fired_at DESC")),
+    sa.Index("ix_alert_events_owner_unread", "owner_user_id", postgresql_where=sa.text("read_at IS NULL")),
+)

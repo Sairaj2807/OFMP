@@ -89,6 +89,18 @@ workspace.
 - The last-used workspace reopens in the same browser.
 - Without a database, the terminal keeps working on local storage only.
 
+## Alerts
+
+The **Alerts** button in the top bar shows the unread count. It opens three tabs:
+- **History.** Alerts as they fired, with mark-all-read and an opt-in for desktop notifications.
+- **Rules.** Create, pause/resume and delete rules. A price rule's level is prefilled with the last price.
+- **Webhooks.** Add, test and delete webhooks. A new webhook's signing secret is shown only once.
+
+Alerts arrive over the same `/ws/v1/stream` connection and appear as toasts (bottom right) for 10 s.
+When the tab is hidden and notifications are allowed, they also appear as desktop notifications. The
+command palette has **Open alerts**. Rules are evaluated on the server, so they fire with the terminal
+closed (history and webhooks).
+
 ## Keyboard
 
 | Key | Action |

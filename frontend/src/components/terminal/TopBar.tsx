@@ -6,6 +6,7 @@ import { Button, Kbd, StatusDot, type DotState } from "@/components/ui/controls"
 import type { StreamStatus } from "@/lib/stream";
 import { useSession } from "@/stores/session";
 import { useTerminal, type Layout } from "@/stores/terminal";
+import { AlertsMenu } from "./AlertsMenu";
 import { WorkspaceMenu } from "./WorkspaceMenu";
 
 function connection(stream: StreamStatus, feedConnected: boolean, feedError: string | null): { state: DotState; label: string } {
@@ -60,6 +61,7 @@ export function TopBar({ onOpenPalette, onLogout }: { onOpenPalette: () => void;
         <Button active={units === "lots"} onClick={() => setUnits("lots")} title={`1 lot = ${feed.lotSize}`}>Lots</Button>
       </div>
       <WorkspaceMenu />
+      <AlertsMenu />
       <button
         type="button"
         onClick={onOpenPalette}

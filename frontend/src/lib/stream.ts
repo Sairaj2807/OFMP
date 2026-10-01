@@ -7,7 +7,9 @@
 // - Close 4401 (session expired/revoked): asks onUnauthenticated() once
 //   (e.g. refresh the session) and reconnects only if that succeeded.
 // - Close 4403 (forbidden origin/permission): stops; retrying cannot help.
-import type { ChartSettings, ChartSnapshot, ServerMessage } from "./types";
+// - "alert" messages (the user's alert rules firing) go to onAlert; they need
+//   no subscription.
+import type { AlertEvent, ChartSettings, ChartSnapshot, ServerMessage } from "./types";
 
 export type StreamStatus = "idle" | "connecting" | "open" | "reconnecting" | "unauthenticated" | "forbidden" | "stopped";
 
@@ -27,6 +29,7 @@ export interface StreamOptions {
   onWelcome?: (data: { intervals?: number[]; heartbeat_sec?: number }) => void;
   onStatus?: (status: StreamStatus, detail?: string) => void;
   onServerError?: (code: string, message: string, id?: string) => void;
+  onAlert?: (event: AlertEvent) => void;
   onUnauthenticated?: () => Promise<boolean>;
   createSocket?: (url: string) => SocketLike;
   schedule?: (fn: () => void, ms: number) => unknown;
@@ -169,6 +172,9 @@ export class StreamClient {
         this.o.onSnapshot(msg.id, snap);
         break;
       }
+      case "alert":
+        if (msg.data) this.o.onAlert?.(msg.data as AlertEvent);
+        break;
       case "error": {
         const d = (msg.data ?? {}) as { code?: string; message?: string };
         this.o.onServerError?.(d.code ?? "ERROR", d.message ?? "", msg.id);

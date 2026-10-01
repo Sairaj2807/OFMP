@@ -44,6 +44,16 @@ groups:
         labels: { severity: warning }
         annotations: { summary: "More than 5% of API requests are failing" }
 
+      - alert: AlertWebhookFailures
+        expr: increase(ofmp_alert_deliveries_total{channel="webhook",outcome="failed"}[15m]) > 5
+        labels: { severity: warning }
+        annotations: { summary: "User alert webhooks are failing ({{ $value }} in 15 min)" }
+
+      - alert: AlertFiringsDropped
+        expr: increase(ofmp_alerts_dropped_total[10m]) > 0
+        labels: { severity: critical }
+        annotations: { summary: "Alert dispatch queue overflowed; user alerts were lost" }
+
       - alert: SlowTickProcessing
         expr: histogram_quantile(0.99, sum(rate(ofmp_tick_processing_seconds_bucket[5m])) by (le)) > 0.01
         for: 10m

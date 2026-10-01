@@ -105,9 +105,78 @@ export interface ChartSettings {
 }
 
 export interface ServerMessage {
-  type: "welcome" | "subscribed" | "replay_started" | "unsubscribed" | "snapshot" | "ping" | "pong" | "error";
+  type: "welcome" | "subscribed" | "replay_started" | "unsubscribed" | "snapshot" | "ping" | "pong" | "error" | "alert";
   seq: number;
   ts: number;
   id?: string;
   data?: unknown;
+}
+
+// -- alerts ------------------------------------------------------------------
+
+export type AlertKind =
+  | "price_above" | "price_below" | "cvd_above" | "cvd_below"
+  | "candle_delta_above" | "candle_delta_below" | "candle_volume_above" | "stacked_imbalance" | "value_area_break";
+
+export interface AlertRule {
+  id: string;
+  name: string;
+  kind: AlertKind;
+  params: { level?: number; interval?: number; side?: string };
+  description: string;
+  mode: "once" | "repeat";
+  cooldown_sec: number;
+  channel_ids: string[];
+  enabled: boolean;
+  revision: number;
+  fire_count: number;
+  last_fired_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AlertRuleInput {
+  name: string;
+  kind: AlertKind;
+  params: AlertRule["params"];
+  mode: AlertRule["mode"];
+  cooldown_sec: number;
+  channel_ids: string[];
+}
+
+export interface AlertEvent {
+  id: number;
+  rule_id: string;
+  rule_name?: string;
+  fired_at: string;
+  kind: AlertKind;
+  symbol: string | null;
+  message: string;
+  value: number | null;
+  details: Record<string, unknown> | null;
+  delivery: Record<string, string> | null;
+  suppressed: string | null;
+  read_at: string | null;
+}
+
+export interface AlertChannel {
+  id: string;
+  kind: "webhook";
+  name: string;
+  url: string | null;
+  enabled: boolean;
+  last_status: "ok" | "failed" | null;
+  last_error: string | null;
+  last_delivery_at: string | null;
+  created_at: string;
+}
+
+export interface AlertKinds {
+  trade_kinds: AlertKind[];
+  candle_kinds: AlertKind[];
+  modes: AlertRule["mode"][];
+  intervals: number[];
+  cooldown_sec: { min: number; max: number; default: number };
+  max_rules: number;
+  max_channels: number;
 }

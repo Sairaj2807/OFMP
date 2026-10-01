@@ -33,6 +33,10 @@ The dev password in `docker-compose.dev.yml` and `.env.example` is for local use
 | `data_quality_events` | table | (detected_at DESC), (kind, detected_at DESC) | the process holding the broker connection |
 | `instruments` | table | unique (provider, token); (name, instrument_type, expiry); (symbol) | API, when a contract is activated |
 | `algorithm_versions` | table | unique (kind, name, version) | migration seed |
+| `workspaces` | table | partial unique (owner, name) where not deleted | API (migration 0003) |
+| `alert_rules` | table | (owner) and (enabled) where not deleted | API (migration 0004) |
+| `alert_events` | table | unique (rule_id, dedup_key); (owner, fired_at DESC); (owner) where unread | alert runtime; pruned after 90 days |
+| `notification_channels` | table | (owner) where not deleted; no secrets stored | API |
 
 **Trades.**
 - Each trade stores `classifier_name`, `classifier_version`, the deciding `method`, and the full

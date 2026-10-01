@@ -2,8 +2,9 @@
 
 configure_api(app, ...)   at import time: middleware, error handlers, routers,
                           the /ws/v1/stream route, rate limiters, defaults.
-start_api(app, ...)       at startup: database-backed auth service, market
-                          gateway, and the stream hub's background loop."""
+start_api(app, ...)       at startup: database-backed auth, workspace and alert
+                          services, market gateway, the stream hub's background
+                          loop and the alert runtime."""
 import asyncio
 import json
 from typing import Optional
@@ -21,6 +22,7 @@ from backend.app.services.auth.email import LogEmailSender
 from backend.app.services.auth.service import AuthService
 
 from .deps import ACCESS_COOKIE
+from .routes.alerts import router as alerts_router
 from .routes.auth import router as auth_router
 from .routes.platform import admin_router, health_router, market_router
 from .routes.workspaces import router as workspaces_router
@@ -35,6 +37,7 @@ def default_limiters() -> dict:
         "refresh": SlidingWindowLimiter(60, 60),
         "email": SlidingWindowLimiter(5, 3600),
         "token": SlidingWindowLimiter(20, 3600),
+        "alert_test": SlidingWindowLimiter(10, 3600),     # webhook test deliveries, per user
     }
 
 
@@ -95,7 +98,8 @@ async def _json(send, status: int, body: dict):
 
 
 def configure_api(app: FastAPI, *, environment: str, cookie_secure: bool, cors_origins: list,
-                  max_request_bytes: int, legacy_auth_required: bool, metrics_enabled: bool = True) -> None:
+                  max_request_bytes: int, legacy_auth_required: bool, metrics_enabled: bool = True,
+                  alert_webhooks_allow_private: bool = False) -> None:
     # Starlette runs the LAST added middleware first: request context wraps everything.
     app.add_middleware(LegacyAuthGuard, enabled=legacy_auth_required)
     if cors_origins:
@@ -105,7 +109,8 @@ def configure_api(app: FastAPI, *, environment: str, cookie_secure: bool, cors_o
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=max_request_bytes)
     app.add_middleware(RequestContextMiddleware)
     install_error_handlers(app)
-    for router in (health_router, auth_router, market_router, admin_router, workspaces_router):
+    for router in (health_router, auth_router, market_router, admin_router, workspaces_router,
+                   alerts_router):
         app.include_router(router)
 
     app.state.environment = environment
@@ -114,6 +119,12 @@ def configure_api(app: FastAPI, *, environment: str, cookie_secure: bool, cors_o
     app.state.limiters = default_limiters()
     app.state.auth_service = None
     app.state.workspace_service = None
+    app.state.alert_service = None
+    app.state.alert_runtime = None
+    app.state.webhook_provider = None
+    app.state.alert_signing_secret = None
+    # development only: lets webhooks target http:// and private addresses (a local receiver)
+    app.state.alert_webhooks_allow_private = alert_webhooks_allow_private
     app.state.db_engine = None
     app.state.market = None
     app.state.stream_hub = None
@@ -137,7 +148,8 @@ def configure_api(app: FastAPI, *, environment: str, cookie_secure: bool, cors_o
 def start_api(app: FastAPI, *, db_engine, jwt_secret: Optional[str], public_base_url: str,
               access_ttl_sec: int, refresh_ttl_sec: int, allow_registration: bool, gateway,
               allowed_intervals: tuple, email_sender=None) -> Optional[asyncio.Task]:
-    """Returns the stream hub's background task (cancel it on shutdown)."""
+    """Returns the stream hub's background task (cancel it on shutdown). The
+    alert runtime's task, when there is a database, is app.state.alert_task."""
     app.state.db_engine = db_engine
     app.state.market = gateway
     if db_engine is not None and jwt_secret:
@@ -154,4 +166,18 @@ def start_api(app: FastAPI, *, db_engine, jwt_secret: Optional[str], public_base
 
     app.state.stream_hub = StreamHub(gateway, authenticate, allowed_intervals=allowed_intervals,
                                      allowed_origins=tuple(app.state.cors_origins))
+    app.state.alert_task = None
+    if db_engine is not None:
+        from backend.app.services.alerts.delivery import InAppProvider, WebhookProvider
+        from backend.app.services.alerts.runtime import AlertRuntime
+        from backend.app.services.alerts.service import AlertService
+        app.state.alert_service = AlertService(db_engine, allowed_intervals)
+        app.state.alert_signing_secret = jwt_secret
+        providers = {}
+        if jwt_secret:
+            app.state.webhook_provider = WebhookProvider(jwt_secret, app.state.alert_webhooks_allow_private)
+            providers["webhook"] = app.state.webhook_provider
+        app.state.alert_runtime = AlertRuntime(app.state.alert_service, InAppProvider(lambda: app.state.stream_hub),
+                                               providers)
+        app.state.alert_task = asyncio.create_task(app.state.alert_runtime.run())
     return asyncio.create_task(app.state.stream_hub.run())

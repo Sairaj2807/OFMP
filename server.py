@@ -6,6 +6,7 @@ process — only derived market data crosses the /ws/frontend boundary.
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import time
 from datetime import date as date_cls
@@ -49,6 +50,7 @@ class NoCacheStaticFiles(StaticFiles):
 
 
 configure_logging(config.LOG_FORMAT)
+log = logging.getLogger("server")
 
 app = FastAPI(
     title="OFMP — Order-Flow Market Platform",
@@ -63,7 +65,8 @@ app = FastAPI(
 )
 configure_api(app, environment=config.ENVIRONMENT, cookie_secure=config.COOKIE_SECURE,
               cors_origins=config.CORS_ORIGINS, max_request_bytes=config.MAX_REQUEST_BYTES,
-              legacy_auth_required=config.AUTH_REQUIRED, metrics_enabled=config.METRICS_ENABLED)
+              legacy_auth_required=config.AUTH_REQUIRED, metrics_enabled=config.METRICS_ENABLED,
+              alert_webhooks_allow_private=config.ALERT_WEBHOOKS_ALLOW_PRIVATE)
 
 STATE = {
     "contract": None,
@@ -117,6 +120,7 @@ def _on_tick(tick: MarketTick):
     if result.get("new_trade") and engine.last_classification is not None:
         c = engine.last_classification
         metrics.TRADES_CLASSIFIED.labels(c.classifier_name, c.classifier_version, c.side).inc()
+        _evaluate_alerts(engine, tick_in)
     engine.last_quote = tick  # keep the latest quote around for header display
 
 
@@ -193,6 +197,20 @@ async def _restore_session(engine: TickProcessorState, contract: dict) -> int:
     return restore_trades(engine, trades, bids, asks)
 
 
+def _evaluate_alerts(engine: TickProcessorState, tick_in: dict) -> None:
+    """Live alert rules see every classified trade (never replay or the startup restore)."""
+    runtime = getattr(app.state, "alert_runtime", None)
+    if runtime is None or engine.last_candle_seen is None:
+        return
+    fp = engine.footprint
+    stats = fp.candle_stats.get(engine.last_candle_seen) or {}
+    cvd = engine.cvd_tracker.cvd + stats.get("run", 0)      # closed candles + the forming one
+    try:
+        runtime.on_trade(fp, int(tick_in["ltt"]), float(tick_in["ltp"]), cvd, engine.last_candle_seen)
+    except Exception:                                       # alerts must never break ingestion
+        log.exception("alert evaluation failed")
+
+
 async def _activate_contract(contract: dict) -> None:
     """Swaps in `contract` as the live one: stops whatever ws_client is
     currently running (a no-op the first time, at startup), builds a fresh
@@ -213,6 +231,8 @@ async def _activate_contract(contract: dict) -> None:
         restored = await _restore_session(engine, contract)
         STATE["contract"] = contract
         STATE["engine"] = engine
+        if getattr(app.state, "alert_runtime", None) is not None:
+            app.state.alert_runtime.reset_market(contract.get("tradingsymbol"))
         STATE["connected"] = False
         STATE["last_error"] = None
         STATE["ws_client"] = client
@@ -256,7 +276,7 @@ async def shutdown():
     if ws_client:
         ws_client.stop()
     for t in (getattr(app.state, "ws_task", None), getattr(app.state, "broadcast_task", None),
-              getattr(app.state, "stream_task", None)):
+              getattr(app.state, "stream_task", None), getattr(app.state, "alert_task", None)):
         if t:
             t.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -267,6 +287,8 @@ async def shutdown():
         writer_task.cancel()                      # run()'s finally flushes what is still buffered
         with contextlib.suppress(asyncio.CancelledError):
             await writer_task
+    if getattr(app.state, "webhook_provider", None) is not None:
+        await app.state.webhook_provider.close()
     if STATE.get("db_engine") is not None:
         await STATE["db_engine"].dispose()
 

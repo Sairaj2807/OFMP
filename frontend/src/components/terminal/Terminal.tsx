@@ -4,12 +4,14 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 
+import { useAlertStore, useAlerts } from "@/hooks/useAlerts";
 import { useLiveStream } from "@/hooks/useLiveStream";
 import { flushSave, useWorkspaces } from "@/hooks/useWorkspaces";
 import { ApiError, api } from "@/lib/api";
 import { intervalLabel } from "@/lib/format";
 import { useSession } from "@/stores/session";
 import { type Layout, useTerminal } from "@/stores/terminal";
+import { AlertToasts } from "./AlertToasts";
 import { BottomBar } from "./BottomBar";
 import { ChartGrid } from "./ChartGrid";
 import { type Command, CommandPalette } from "./CommandPalette";
@@ -52,6 +54,7 @@ export function Terminal() {
 
   useLiveStream(user !== null);
   useWorkspaces(user !== null);
+  useAlerts(user !== null);
 
   const logout = useCallback(async () => {
     await flushSave().catch(() => undefined);   // keep the last layout change
@@ -82,6 +85,7 @@ export function Terminal() {
       { id: "imb", group: "Toggle", label: "Stacked imbalances", shortcut: "I", run: toggle("showImbalances") },
       { id: "units-qty", group: "Units", label: "Raw quantity", run: () => t().setUnits("qty") },
       { id: "units-lots", group: "Units", label: "Lots", run: () => t().setUnits("lots") },
+      { id: "alerts", group: "Alerts", label: "Open alerts", run: () => useAlertStore.getState().set({ open: true, tab: "history" }) },
       { id: "logout", group: "Account", label: "Sign out", run: logout },
     ];
   }, [intervals, logout]);
@@ -132,6 +136,7 @@ export function Terminal() {
         </Group>
       </main>
       <BottomBar />
+      <AlertToasts />
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} commands={commands} />}
     </div>
   );
