@@ -2,14 +2,14 @@
 # nginx image: TLS termination, security headers, WebSocket proxying, and the
 # built terminal served at /app. Build context: repository root.
 
-FROM node:24-alpine AS frontend
+FROM node:26-alpine AS frontend
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
 RUN npm run build
 
-FROM node:24-alpine AS csp
+FROM node:26-alpine AS csp
 WORKDIR /csp
 COPY deploy/nginx/csp-hashes.mjs ./
 COPY --from=frontend /build/out ./out
