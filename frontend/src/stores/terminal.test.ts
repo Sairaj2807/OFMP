@@ -68,6 +68,8 @@ describe("config migration", () => {
     const v3 = migrateConfig({ charts: [{ id: "c2", view: "profile", profileRow: 20 }, { id: "c3", view: "pie", profileRow: 7 }] });
     expect(v3.charts.map((c) => [c.view, c.profileRow])).toEqual(
       [["footprint", 5], ["profile", 20], ["footprint", 5], ["footprint", 5]]);   // per chart; junk repaired
+    const v4 = migrateConfig({ charts: [{ id: "c1", profileMode: "split" }, { id: "c2", profileMode: "zigzag" }] });
+    expect(v4.charts.map((c) => c.profileMode)).toEqual(["split", "stacked", "stacked", "stacked"]);
     expect(migrateConfig("garbage")).toEqual(initialTerminal);
   });
 });

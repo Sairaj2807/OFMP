@@ -97,6 +97,13 @@ export function Terminal() {
         run: () => t().updateChart(active(), { view: "footprint" }) },
       { id: "view-profile", group: "Chart type", label: "Market profile on the focused chart",
         run: () => t().updateChart(active(), { view: "profile" }) },
+      { id: "profile-split", group: "Chart type", label: "Market profile: stacked / split by period (focused chart)",
+        shortcut: "S",
+        run: () => {
+          const c = t().charts.find((x) => x.id === active());
+          if (c) t().updateChart(c.id, { view: "profile", profileMode: c.view === "profile" && c.profileMode === "split"
+            ? "stacked" : "split" });
+        } },
       { id: "poc", group: "Toggle", label: "Point of control", shortcut: "P", run: toggle("showPoc") },
       { id: "va", group: "Toggle", label: "Value area", shortcut: "V", run: toggle("showValueArea") },
       { id: "imb", group: "Toggle", label: "Stacked imbalances", shortcut: "I", run: toggle("showImbalances") },

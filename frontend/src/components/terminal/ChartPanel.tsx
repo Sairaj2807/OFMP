@@ -53,6 +53,12 @@ export function ChartPanel({ config }: { config: ChartConfig }) {
                     onChange={(e) => update(config.id, { profileRow: Number(e.target.value) })}>
               {PROFILE_ROWS.map((n) => <option key={n} value={n}>{n} pt/row</option>)}
             </Select>
+            <div className="flex items-center gap-0.5" role="group" aria-label="Profile layout">
+              <Button active={config.profileMode === "stacked"} onClick={() => update(config.id, { profileMode: "stacked" })}
+                      title="Stacked: each row's letters packed left (the profile shape)">Stacked</Button>
+              <Button active={config.profileMode === "split"} onClick={() => update(config.id, { profileMode: "split" })}
+                      title="Split: one column per period, a time trace with each period's open and close">Split</Button>
+            </div>
             <Button active={config.showPoc} onClick={() => update(config.id, { showPoc: !config.showPoc })}
                     title="TPO and volume points of control">POC</Button>
             <Button active={config.showValueArea} onClick={() => update(config.id, { showValueArea: !config.showValueArea })}

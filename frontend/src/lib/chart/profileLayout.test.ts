@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import type { MarketProfile } from "../types";
-import { centreOn, computeLayout, labelEvery, letterIndex, MIN_ROW_PX, periodColor, rowIndexOf } from "./profileLayout";
+import {
+  centreOn, computeLayout, labelEvery, letterIndex, MIN_ROW_PX, periodColor, rowIndexOf, splitColumns, SPLIT_FOOTER_PX, tpoX,
+} from "./profileLayout";
 
 const row = (price: number, letters: string, volume = 0) =>
   ({ price, letters, tpo: letters.length, volume, buy: volume, sell: 0, delta: volume });
@@ -26,6 +28,19 @@ describe("market profile layout", () => {
     expect(big.maxVolume).toBe(4990);
     expect(small.volumeX).toBeGreaterThan(small.letterX + small.letterW);
     expect(small.axisX).toBe(600 - 64);
+  });
+
+  it("split gives every period its own column; stacked packs letters left", () => {
+    const p: MarketProfile = { ...profile(3), rows: [row(24610, "AD"), row(24605, "ABD"), row(24600, "D")],
+                               periods: [0, 1, 3].map((index) => ({ index, letter: "ABCD"[index], start_ms: 0,
+                                                                     high: 0, low: 0, open: 0, close: 0 })) };
+    expect(splitColumns(p)).toBe(4);                 // A..D, including C (no trades: an empty column)
+    const stacked = computeLayout(p, 600, 400, "stacked");
+    const split = computeLayout(p, 600, 400, "split");
+    expect([stacked.columns, stacked.footer, split.columns, split.footer]).toEqual([3, 0, 4, SPLIT_FOOTER_PX]);
+    expect(tpoX(stacked, 1, "D")).toBe(stacked.letterX + stacked.cellW);          // 2nd letter of "AD"
+    expect(tpoX(split, 1, "D")).toBe(split.letterX + 3 * split.cellW);            // D's own column
+    expect(split.rowPx * 3).toBeLessThanOrEqual(400 - SPLIT_FOOTER_PX);
   });
 
   it("finds the row of a price by its band (rows labelled by their floor)", () => {

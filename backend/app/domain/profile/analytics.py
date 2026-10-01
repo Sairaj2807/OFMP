@@ -160,7 +160,8 @@ def build_profile(profile: SessionProfile, row_points: float = 5.0, va_pct: floa
         "tick_size": ts,
         "period_minutes": session.period_minutes,
         "periods": [{"index": i, "letter": letter(i), "start_ms": session.period_start_ms(profile.date, i),
-                     "high": _round(profile.periods[i].high * ts), "low": _round(profile.periods[i].low * ts)}
+                     "high": _round(profile.periods[i].high * ts), "low": _round(profile.periods[i].low * ts),
+                     "open": _round(profile.periods[i].open * ts), "close": _round(profile.periods[i].close * ts)}
                     for i in sorted(profile.periods)],
         "current_period": in_progress,
         "rows": [{"price": r["price"], "letters": "".join(letter(i) for i in r["periods"]), "tpo": r["tpo"],

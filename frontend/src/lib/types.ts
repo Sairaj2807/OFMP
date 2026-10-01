@@ -148,7 +148,7 @@ export interface MarketProfile {
   row_size?: number;
   tick_size?: number;
   period_minutes?: number;
-  periods?: { index: number; letter: string; start_ms: number; high: number; low: number }[];
+  periods?: { index: number; letter: string; start_ms: number; high: number; low: number; open: number; close: number }[];
   current_period?: number | null;
   rows: ProfileRow[];
   poc_tpo?: number | null;

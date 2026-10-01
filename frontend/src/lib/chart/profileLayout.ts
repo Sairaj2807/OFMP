@@ -13,6 +13,9 @@ export const MIN_ROW_PX = 4;
 export const MAX_ROW_PX = 22;
 export const LETTER_MIN_PX = 7;            // below this font size, TPOs are drawn as blocks
 export const VOLUME_SHARE = 0.35;
+export const SPLIT_FOOTER_PX = 16;          // period letters / start times under a split profile
+
+export type ProfileMode = "stacked" | "split";
 
 export interface ProfileLayout {
   width: number;
@@ -31,28 +34,47 @@ export interface ProfileLayout {
   drawLetters: boolean;
   maxVolume: number;
   maxLetters: number;
+  mode: ProfileMode;
+  columns: number;                          // stacked: most letters in a row; split: number of periods
+  footer: number;                           // px reserved at the bottom (split: period labels)
 }
 
-export function computeLayout(profile: MarketProfile, width: number, height: number): ProfileLayout {
+export function computeLayout(profile: MarketProfile, width: number, height: number,
+                              mode: ProfileMode = "stacked"): ProfileLayout {
   const rows = profile.rows;
   const n = Math.max(1, rows.length);
   const plotW = Math.max(40, width - AXIS_WIDTH);
-  const rowPx = Math.min(MAX_ROW_PX, Math.max(MIN_ROW_PX, height / n));
-  const visibleRows = Math.max(1, Math.floor(height / rowPx));
+  const footer = mode === "split" ? SPLIT_FOOTER_PX : 0;
+  const plotH = Math.max(20, height - footer);
+  const rowPx = Math.min(MAX_ROW_PX, Math.max(MIN_ROW_PX, plotH / n));
+  const visibleRows = Math.max(1, Math.floor(plotH / rowPx));
   const maxLetters = rows.reduce((m, r) => Math.max(m, r.letters.length), 1);
+  const columns = mode === "split" ? splitColumns(profile) : maxLetters;
   const maxVolume = rows.reduce((m, r) => Math.max(m, r.volume), 0);
   const letterX = 10;                                   // room for the IB / single-print markers
   const volumeW = Math.max(10, Math.floor(plotW * VOLUME_SHARE));
   const volumeX = plotW - volumeW - 4;
   const letterW = Math.max(20, volumeX - 8 - letterX);
-  const cellW = Math.max(2, Math.min(14, letterW / maxLetters));
+  const cellW = Math.max(2, Math.min(mode === "split" ? 28 : 14, letterW / columns));
   const fontPx = Math.floor(Math.min(rowPx * 0.85, cellW * 1.15, 13));
   return {
-    width, height, rowPx, top: Math.max(0, Math.floor((height - n * rowPx) / 2)), visibleRows,
+    width, height, rowPx, top: Math.max(0, Math.floor((plotH - n * rowPx) / 2)), visibleRows,
     maxScroll: Math.max(0, n - visibleRows),
     letterX, letterW, cellW, volumeX, volumeW, axisX: plotW,
-    fontPx, drawLetters: fontPx >= LETTER_MIN_PX, maxVolume, maxLetters,
+    fontPx, drawLetters: fontPx >= LETTER_MIN_PX, maxVolume, maxLetters, mode, columns, footer,
   };
+}
+
+/** Split view: one column per period, from A up to the latest period that traded. */
+export function splitColumns(profile: MarketProfile): number {
+  const periods = profile.periods ?? [];
+  return Math.max(1, periods.reduce((m, p) => Math.max(m, p.index + 1), 0));
+}
+
+/** x of a TPO: stacked packs a row's letters to the left; split puts each period in its own column. */
+export function tpoX(layout: ProfileLayout, positionInRow: number, letter: string): number {
+  const column = layout.mode === "split" ? letterIndex(letter) : positionInRow;
+  return layout.letterX + column * layout.cellW;
 }
 
 /** Row index (0 = highest row) whose band contains `price`, or -1 if outside. */

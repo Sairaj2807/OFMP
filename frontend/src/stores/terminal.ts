@@ -13,6 +13,7 @@ export type ChartMode = "live" | "replay";
 export type ChartView = "footprint" | "profile";
 export const PROFILE_ROWS = [1, 2, 5, 10, 20, 50] as const;      // market profile row sizes, points
 export const DEFAULT_PROFILE_ROW = 5;
+export type ProfileMode = "stacked" | "split";
 
 export interface ChartConfig {
   id: string;
@@ -27,6 +28,7 @@ export interface ChartConfig {
   replayDate: string | null; // session replayed when mode === "replay"
   view: ChartView;           // order-flow footprint or market profile, per chart
   profileRow: number;        // market profile row size, points
+  profileMode: ProfileMode;  // stacked (letters packed left) or split (one column per period)
 }
 
 export const CHART_IDS = ["c1", "c2", "c3", "c4"] as const;
@@ -35,7 +37,7 @@ export const DEFAULT_INTERVALS = [60, 180, 300, 900, 1800];
 const defaultChart = (id: string, interval: number): ChartConfig => ({
   id, interval, ppr: 1, cellStyle: "profile", displayMode: "bidask",
   showPoc: true, showValueArea: true, showImbalances: true, mode: "live", replayDate: null,
-  view: "footprint", profileRow: DEFAULT_PROFILE_ROW,
+  view: "footprint", profileRow: DEFAULT_PROFILE_ROW, profileMode: "stacked",
 });
 
 /** The persisted/synced part of the terminal state. */
@@ -62,7 +64,7 @@ export const initialTerminal: TerminalConfig = {
 };
 
 export const STORAGE_KEY = "ofmp.terminal";
-export const STORAGE_VERSION = 3;
+export const STORAGE_VERSION = 4;
 
 /**
  * Brings any saved config (localStorage or a server workspace, any version)
@@ -70,6 +72,7 @@ export const STORAGE_VERSION = 3;
  * field by field, so one bad value never discards a whole layout.
  *   v1 -> v2: charts gained mode/replayDate (existing charts become live).
  *   v2 -> v3: charts gained view/profileRow (existing charts stay footprints, 5-point rows).
+ *   v3 -> v4: charts gained profileMode (existing profiles stay stacked).
  */
 export function migrateConfig(raw: unknown): TerminalConfig {
   const src = (raw && typeof raw === "object" ? raw : {}) as Partial<TerminalConfig>;
@@ -86,6 +89,7 @@ export function migrateConfig(raw: unknown): TerminalConfig {
     if (c.mode === "replay" && !c.replayDate) c.mode = "live";
     if (c.view !== "footprint" && c.view !== "profile") c.view = "footprint";
     if (!(PROFILE_ROWS as readonly number[]).includes(c.profileRow)) c.profileRow = DEFAULT_PROFILE_ROW;
+    if (c.profileMode !== "stacked" && c.profileMode !== "split") c.profileMode = "stacked";
     for (const k of ["showPoc", "showValueArea", "showImbalances"] as const) if (typeof c[k] !== "boolean") c[k] = def[k];
     return c;
   });

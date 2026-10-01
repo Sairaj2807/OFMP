@@ -119,6 +119,10 @@ The left sidebar switches the **focused** chart between **Order-flow footprint**
 Each chart keeps its own view and its own profile row size (1–50 points, default 5), both saved with the
 workspace.
 
+Each profile chart also has two layouts:
+- **Stacked:** letters packed left, the classic profile shape.
+- **Split:** one column per 30-minute period, with each period's open and close marked.
+
 The profile chart draws:
 - TPO letters per 30-minute period (blocks when rows are small), value area, POC (highlighted row) and
   volume POC (outlined bar);
@@ -136,3 +140,4 @@ It works live and in replay. Definitions are in `docs/market-profile.md`.
 | `1`–`5` | interval of the focused chart |
 | `P` / `V` / `I` | toggle POC / value area / stacked imbalances |
 | `M` | focused chart: footprint ↔ market profile |
+| `S` | focused chart: market profile stacked ↔ split by period |

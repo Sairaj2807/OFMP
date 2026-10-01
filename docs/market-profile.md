@@ -41,6 +41,16 @@ footprint, one at a time: live trades, the startup restore and replay. It never 
 
 ## The chart
 
+There are two layouts per chart, toggled with **Stacked / Split** in the chart toolbar or with `S`:
+- **Stacked** (default): each row's letters are packed to the left, giving the classic profile shape.
+- **Split**: one column per period, A to the latest, so the session reads left to right as a time trace.
+  - A period that didn't trade leaves an empty column.
+  - Each period's **open** is marked on the left of its column and its **close** on the right.
+  - The period in progress has a faint band, and the letters (with start times when there is room) run
+    along the bottom.
+
+The layout is saved per chart with the workspace (layout format v4).
+
 - TPO letters per period, coloured by period. When rows are too small for text, the letters become
   coloured blocks.
 - Value-area shading. The TPO POC is a highlighted row; the volume POC is an outlined bar.

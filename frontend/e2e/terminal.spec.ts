@@ -277,6 +277,13 @@ test("market profile: sidebar switches one chart, the other stays a footprint", 
   await expect(figures).toContainText("TPOs");
   await c2.getByLabel("Profile row size").selectOption("10");
   await expect(c2.getByLabel("Profile row size")).toHaveValue("10");
+  // stacked (default) and split-by-period layouts
+  const layout = c2.getByRole("group", { name: "Profile layout" });
+  await c2.getByRole("button", { name: "Stacked", exact: true }).click();
+  await expect(page.getByRole("img", { name: "Market profile chart c2 (stacked)" })).toBeVisible();
+  await layout.getByRole("button", { name: "Split", exact: true }).click();
+  await expect(layout.getByRole("button", { name: "Split", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("img", { name: "Market profile chart c2 (split)" })).toBeVisible();
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/market-profile.png` });
 
   // saved with the workspace: survives a reload
@@ -285,6 +292,8 @@ test("market profile: sidebar switches one chart, the other stays a footprint", 
   await expect(page.getByRole("button", { name: /Workspace/ })).toContainText(/Saved|Saving/);   // server copy applied
   await expect(page.getByTestId("profile-c2")).toBeVisible();
   await expect(page.getByRole("region", { name: "Chart c2" }).getByLabel("Profile row size")).toHaveValue("10");
+  await expect(page.getByRole("img", { name: "Market profile chart c2 (split)" })).toBeVisible();   // saved too
+  await page.getByRole("region", { name: "Chart c2" }).getByRole("button", { name: "Stacked", exact: true }).click();
 
   // keyboard: M toggles the focused chart back to a footprint
   await page.getByRole("region", { name: "Chart c2" }).click();

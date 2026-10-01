@@ -32,6 +32,8 @@ def test_tpo_letters_follow_the_worked_example():
     assert letters(r) == {24525: "C", 24520: "BC", 24515: "ABC", 24510: "ABC", 24505: "AB", 24500: "A"}
     assert [x["price"] for x in r["rows"]] == sorted(letters(r), reverse=True)   # ladder, high to low
     assert r["stats"]["tpo_total"] == 12 and r["current_period"] == 2
+    assert [(x["letter"], x["open"], x["close"], x["low"], x["high"]) for x in r["periods"]] == [
+        ("A", 24500, 24515, 24500, 24515), ("B", 24505, 24520, 24505, 24520), ("C", 24510, 24525, 24510, 24525)]
 
 
 def test_period_marks_its_whole_high_low_range_once():

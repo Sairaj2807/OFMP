@@ -3,6 +3,10 @@
 // One market profile chart, drawn on a canvas from the snapshot bus (the 2 Hz
 // stream never re-renders React; only the stats strip does, on change).
 //
+// Two layouts: stacked (each row's letters packed to the left: the classic
+// profile shape) and split (one column per period, so the session reads left
+// to right as a time trace, with each period's open and close marked).
+//
 // Draws: TPO letters per period (blocks when rows are too small for text),
 // the value area band, TPO POC (solid) and volume POC (dashed), initial
 // balance bracket, single prints and tails, volume at price split into buy /
@@ -13,8 +17,9 @@ import { useEffect, useRef, useState } from "react";
 import { compact, price as fmtPrice, signed } from "@/lib/format";
 import { snapshotBus } from "@/lib/snapshots";
 import {
-  type ProfileLayout, centreOn, computeLayout, labelEvery, letterIndex, periodColor, rowIndexOf,
+  type ProfileLayout, centreOn, computeLayout, labelEvery, letterIndex, periodColor, rowIndexOf, tpoX,
 } from "@/lib/chart/profileLayout";
+import { istTime } from "@/lib/format";
 import type { MarketProfile, ProfileRow } from "@/lib/types";
 import type { ChartConfig, Units } from "@/stores/terminal";
 
@@ -36,15 +41,17 @@ export function MarketProfileChart({ config, units, lotSize }: Props) {
   const tipRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<MarketProfile | null>(null);
   const scrollRef = useRef<number | null>(null);           // null: follow the last price
-  const optsRef = useRef({ showPoc: config.showPoc, showValueArea: config.showValueArea, units, lotSize });
+  const optsRef = useRef({ showPoc: config.showPoc, showValueArea: config.showValueArea, units, lotSize,
+                           mode: config.profileMode });
   const drawRef = useRef<() => void>(() => undefined);
   const [summary, setSummary] = useState<MarketProfile | null>(null);
   const { id } = config;
 
   useEffect(() => {
-    optsRef.current = { showPoc: config.showPoc, showValueArea: config.showValueArea, units, lotSize };
+    optsRef.current = { showPoc: config.showPoc, showValueArea: config.showValueArea, units, lotSize,
+                        mode: config.profileMode };
     drawRef.current();
-  }, [config.showPoc, config.showValueArea, units, lotSize]);
+  }, [config.showPoc, config.showValueArea, units, lotSize, config.profileMode]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -71,7 +78,7 @@ export function MarketProfileChart({ config, units, lotSize }: Props) {
         layout = null;
         return;
       }
-      layout = computeLayout(p, w, h);
+      layout = computeLayout(p, w, h, optsRef.current.mode);
       drawProfile(ctx, p, layout, scrollFor(p, layout), optsRef.current);
     };
 
@@ -108,7 +115,8 @@ export function MarketProfileChart({ config, units, lotSize }: Props) {
       if (!tip || !p || !layout) return;
       const rect = canvas.getBoundingClientRect();
       const y = e.clientY - rect.top;
-      const row = y < layout.top ? undefined : p.rows[Math.floor((y - layout.top) / layout.rowPx) + scrollFor(p, layout)];
+      const inRows = y >= layout.top && y < layout.height - layout.footer;
+      const row = inRows ? p.rows[Math.floor((y - layout.top) / layout.rowPx) + scrollFor(p, layout)] : undefined;
       if (!row) {
         tip.hidden = true;
         return;
@@ -167,7 +175,8 @@ export function MarketProfileChart({ config, units, lotSize }: Props) {
         )}
       </div>
       <div ref={wrapRef} className="relative min-h-0 flex-1">
-        <canvas ref={canvasRef} className="absolute inset-0" aria-label={`Market profile chart ${id}`} role="img" />
+        <canvas ref={canvasRef} className="absolute inset-0" role="img"
+                aria-label={`Market profile chart ${id} (${config.profileMode})`} />
         <div ref={tipRef} hidden
              className="num pointer-events-none absolute left-2 z-10 rounded border border-line-strong bg-panel-2 px-2 py-0.5 text-[11px] text-fg" />
       </div>
@@ -197,6 +206,12 @@ function drawProfile(ctx: CanvasRenderingContext2D, p: MarketProfile, l: Profile
                      opts: { showPoc: boolean; showValueArea: boolean }) {
   const rows = p.rows, rowSize = p.row_size!;
   const first = scroll, last = Math.min(rows.length, scroll + l.visibleRows + 1);
+  const split = l.mode === "split";
+  const plotBottom = l.height - l.footer;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, l.width, plotBottom);                 // rows never draw over the split footer
+  ctx.clip();
   const yOf = (i: number) => l.top + (i - scroll) * l.rowPx;
   const yOfPrice = (price: number | null | undefined) => {
     if (price == null) return null;
@@ -215,6 +230,23 @@ function drawProfile(ctx: CanvasRenderingContext2D, p: MarketProfile, l: Profile
       ctx.fillStyle = C.va;
       ctx.fillRect(0, r[0], l.axisX, r[1] - r[0]);
     }
+  }
+
+  // split: a faint band behind the period in progress, and column separators
+  if (split) {
+    const cur = p.current_period;
+    if (cur != null) {
+      ctx.fillStyle = "rgba(255,255,255,0.035)";
+      ctx.fillRect(l.letterX + cur * l.cellW, 0, l.cellW, plotBottom);
+    }
+    ctx.strokeStyle = C.grid;
+    ctx.beginPath();
+    for (let k = 1; k < l.columns; k++) {
+      const x = Math.round(l.letterX + k * l.cellW) + 0.5;
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, plotBottom);
+    }
+    ctx.stroke();
   }
 
   // TPO POC: the row highlighted behind its letters (a line would strike through them)
@@ -236,7 +268,7 @@ function drawProfile(ctx: CanvasRenderingContext2D, p: MarketProfile, l: Profile
     for (let k = 0; k < row.letters.length; k++) {
       const ch = row.letters[k];
       const idx = letterIndex(ch);
-      const x = l.letterX + k * l.cellW;
+      const x = tpoX(l, k, ch);
       ctx.fillStyle = periodColor(idx);
       ctx.globalAlpha = idx === current ? 1 : 0.85;
       if (l.drawLetters) {
@@ -256,6 +288,17 @@ function drawProfile(ctx: CanvasRenderingContext2D, p: MarketProfile, l: Profile
       ctx.fillStyle = C.sell;
       ctx.fillRect(l.volumeX + buyW, y + 1, total - buyW, h);
       ctx.globalAlpha = 1;
+    }
+  }
+
+  // split: each period's open (notch on the left of its cell) and close (notch on the right)
+  if (split) {
+    for (const per of p.periods ?? []) {
+      const x = l.letterX + per.index * l.cellW;
+      const oy = yOfPrice(per.open), cy = yOfPrice(per.close);
+      ctx.fillStyle = periodColor(per.index);
+      if (oy != null) ctx.fillRect(x - 1, oy - l.rowPx / 2 + 1, 2, Math.max(2, l.rowPx - 2));
+      if (cy != null) ctx.fillRect(x + l.cellW - 2, cy - l.rowPx / 2 + 1, 2, Math.max(2, l.rowPx - 2));
     }
   }
 
@@ -313,6 +356,28 @@ function drawProfile(ctx: CanvasRenderingContext2D, p: MarketProfile, l: Profile
     }
   }
 
+  ctx.restore();
+
+  // split: period letters (and start times when there is room) under their columns
+  if (split) {
+    ctx.fillStyle = C.bg;
+    ctx.fillRect(0, plotBottom, l.axisX, l.footer);
+    ctx.strokeStyle = C.axis;
+    ctx.beginPath();
+    ctx.moveTo(0, plotBottom + 0.5);
+    ctx.lineTo(l.axisX, plotBottom + 0.5);
+    ctx.stroke();
+    ctx.font = "10px ui-monospace, Consolas, monospace";
+    ctx.textBaseline = "middle";
+    for (const per of p.periods ?? []) {
+      const x = l.letterX + per.index * l.cellW;
+      const label = l.cellW >= 40 ? `${per.letter} ${istTime(per.start_ms / 1000)}` : per.letter;
+      if (ctx.measureText(label).width > l.cellW + 2 && per.index % 2) continue;   // crowded: every other letter
+      ctx.fillStyle = periodColor(per.index);
+      ctx.fillText(label, x + 1, plotBottom + l.footer / 2);
+    }
+  }
+
   // price axis
   ctx.fillStyle = C.bg;
   ctx.fillRect(l.axisX, 0, l.width - l.axisX, l.height);
@@ -329,6 +394,7 @@ function drawProfile(ctx: CanvasRenderingContext2D, p: MarketProfile, l: Profile
   const cy = yOfPrice(close);
   for (let i = first; i < last; i++) {
     const y = yOf(i) + l.rowPx / 2;
+    if (y > plotBottom) break;
     if (i % every || (cy != null && Math.abs(y - cy) < 14)) continue;     // keep clear of the last-price box
     ctx.fillText(rows[i].price.toFixed(digits), l.axisX + 6, y);
   }
