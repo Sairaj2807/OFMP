@@ -65,9 +65,67 @@ profiles, and double-click returns to following the last price. A strip above th
 volume POC, VAH, VAL, initial balance, TPO count, volume, delta, the number of single prints and the
 previous POC.
 
+## Multi-day profiles (one shared price axis)
+
+Pick **Sessions** (5, 10 or 20 days + today) in a live profile chart's toolbar. The chart then shows the
+active contract's finished sessions and today side by side.
+
+**Each day is its own profile, never merged:**
+- letters, volume, POC, value area, initial balance, single prints, tails and HVN/LVN;
+- built by the same `SessionProfile` + `build_profile`. A test proves every day equals its single-day
+  build.
+
+**On the chart:**
+- **One price axis.** A price is always at the same height in every column. The axis covers the union of
+  all shown days on the engine's absolute row grid (row = floor(price ÷ row size)), so no single day's
+  range decides it.
+- **One column per session**, oldest to newest, today rightmost and marked as live.
+- **Drawn per column:** the date header, separators, and each day's overlays (value-area band, POC row,
+  volume POC, IB bracket, single prints/tails, HVN/LVN).
+- **Volume bars** are scaled within each day.
+
+**Navigation:**
+- The wheel scrolls price; Shift+wheel or sideways trackpad scrolls days; dragging pans both.
+- Double-click goes back to following today: rightmost column, last price centred.
+- Hovering shows the hovered day's own row (date, price, letters, TPO, volume, buy/sell, delta). The figures
+  line shows the hovered day, or today.
+- Only visible columns and rows are drawn.
+
+**Live vs historical:**
+- **Today** stays on the live engine and updates every push.
+- **Finished sessions** are built once, cached, and sent once (`profile_history`). They are never resent
+  every 0.5 s, and live trades never change them.
+- **What triggers a resend:** a row-size or session-count change, a contract switch, or a new session (when
+  today rolls over, it becomes history).
+
+**Which sessions are included** (`backend/app/services/profile_history.py`):
+- Only sessions whose trades are tagged with exactly the active contract. Other contracts are never mixed
+  in.
+- Sessions recorded before contract tagging (symbol unknown: 22–29 Sep 2026 in the dev database) are
+  never guessed. They are listed as "N session(s) not shown", with the reason on hover.
+- Days without stored trades are simply absent, never invented.
+- A day that fails to build shows "Could not load"; the other days still show.
+
+**Cache and performance:**
+- Two LRU levels per process, kept until restart: the folded session per (version, contract, tick size,
+  date), and the built profile per row size as well.
+- `PROFILE_VERSION` is part of every key, so changed profile maths never reuses old results.
+- Measured on 20 sessions of ~10,400 trades each: 549 ms cold, 1 ms cached, 5 ms for a row-size change
+  (no database query).
+- On real data: 30 Sep (1,544 trades) loads in 75 ms, about 3 KB at 5-point rows.
+
+**API:**
+- Stream: `subscribe` with `"view":"profile","row":5,"days":5`.
+- HTTP: `GET /api/v1/market/profile/history?row=&limit=&from=&to=` (at most 50 sessions; a range of at most
+  a year).
+- Multi-day applies to live charts; replay stays one session.
+
 ## Not done yet
 
 - Composite profiles (week, month), value migration, and POC migration.
+- Multi-day across contracts (continuous-futures rollover) and in replay.
+- Contract identity for the untagged September sessions (a one-off backfill, if the contract can be
+  established from an authoritative source).
 - Day-type and open-type classification.
 - Market Profile alert rules, e.g. "price leaves the value area", "IB break", "POC migrates".
 - Printed-prices-only TPO marking as an option (the engine stores tick ranges per period, which is what

@@ -132,6 +132,14 @@ The profile chart draws:
 
 It works live and in replay. Definitions are in `docs/market-profile.md`.
 
+**Sessions** (live only) shows 5, 10 or 20 finished sessions of the active contract beside today:
+- every day an independent profile, all on one price axis;
+- the wheel scrolls price, Shift+wheel or dragging scrolls days, double-click follows today;
+- hover shows the hovered day's own row.
+
+The coordinate model is `src/lib/chart/multiDay.ts` and the renderer is
+`components/chart/MultiDayProfileChart.tsx`.
+
 ## Keyboard
 
 | Key | Action |

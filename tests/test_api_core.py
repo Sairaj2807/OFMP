@@ -183,6 +183,9 @@ class FakeGateway:
     async def session_profile(self, date, row):
         return {"date": date, "row_size": row} if date == "2026-09-29" else None
 
+    async def profile_history(self, row, limit, date_from=None, date_to=None):
+        return {"row_size": row, "limit": limit, "from": date_from, "to": date_to, "sessions": []}
+
 
 def user(role="user"):
     return AuthUser(uuid.UUID(int=1), "u@example.com", "U", role, True, uuid.UUID(int=2))
@@ -529,6 +532,61 @@ def test_ws_profile_view_per_chart_live_and_replay():
                               and "view" not in m["data"] for m in ms)
         kept = latest(collect(ws, foot), "snapshot", "c4")["data"]
         assert kept["replay"]["index"] == 6 and kept["interval"] == 60
+
+
+class HistoryGateway(FakeGateway):
+    def __init__(self):
+        super().__init__()
+        self.epoch = ("NIFTY27OCT26FUT", "2026-10-08")
+        self.history_calls = []
+
+    def history_epoch(self):
+        return self.epoch
+
+    async def profile_history(self, row, limit, date_from=None, date_to=None):
+        self.history_calls.append((row, limit))
+        return {"symbol": self.epoch[0], "row_size": row, "live_date": self.epoch[1],
+                "sessions": [{"date": "2026-10-07", "state": "historical", "profile": {"rows": []}}], "excluded": []}
+
+
+def test_ws_profile_history_is_sent_once_and_again_only_when_it_changes():
+    gw = HistoryGateway()
+    app, _ = ws_app({"good-token-123": user()}, gateway=gw)
+    hub = app.state.stream_hub
+    c = TestClient(app)
+    c.cookies.set("ofmp_access", "good-token-123")
+    has = lambda t, i: lambda ms: any(m["type"] == t and m.get("id") == i for m in ms)   # noqa: E731
+    count = lambda ms: sum(1 for m in ms if m["type"] == "profile_history")             # noqa: E731
+    with c.websocket_connect("/ws/v1/stream") as ws:
+        ws.receive_json()
+        ws.send_json({"action": "subscribe", "id": "c1", "streams": ["chart"], "view": "profile", "row": 5, "days": 3})
+        msgs = collect(ws, has("profile_history", "c1"))
+        hist = latest(msgs, "profile_history", "c1")["data"]
+        assert hist["days"] == 3 and hist["row_size"] == 5 and hist["sessions"][0]["state"] == "historical"
+        assert latest(msgs, "subscribed", "c1")["data"]["days"] == 3
+        assert gw.history_calls == [(5, 3)]
+
+        for _ in range(3):                                 # live pushes carry today only: no history resent
+            ws.portal.call(hub.push_once)
+        ws.send_json({"action": "ping"})
+        assert count(collect(ws, has("pong", None))) == 0 and gw.history_calls == [(5, 3)]
+
+        gw.epoch = ("NIFTY27OCT26FUT", "2026-10-09")       # a new session (or a contract switch)
+        ws.portal.call(hub.push_once)
+        assert latest(collect(ws, has("profile_history", "c1")), "profile_history", "c1")["data"]["live_date"] \
+            == "2026-10-09"
+        ws.send_json({"action": "subscribe", "id": "c1", "streams": ["chart"], "view": "profile", "row": 5, "days": 3})
+        ws.send_json({"action": "ping"})
+        assert count(collect(ws, has("pong", None))) == 0  # same row and days: not resent
+        ws.send_json({"action": "subscribe", "id": "c1", "streams": ["chart"], "view": "profile", "row": 10, "days": 3})
+        assert latest(collect(ws, has("profile_history", "c1")), "profile_history", "c1")["data"]["row_size"] == 10
+        ws.send_json({"action": "subscribe", "id": "c1", "streams": ["chart"], "view": "profile", "row": 10})
+        ws.send_json({"action": "ping"})
+        assert count(collect(ws, has("pong", None))) == 0
+        assert next(iter(hub.connections)).history == {}  # today only: no history kept
+        ws.send_json({"action": "subscribe", "id": "c2", "streams": ["chart"], "view": "profile", "days": 99})
+        assert latest(collect(ws, has("error", None)), "error", None)["data"]["code"] == "INVALID_MESSAGE"
+    assert gw.history_calls == [(5, 3), (5, 3), (10, 3)]
 
 
 def test_replay_sessions_endpoint_requires_market_read():

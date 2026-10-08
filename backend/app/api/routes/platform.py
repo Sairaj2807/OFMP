@@ -2,7 +2,7 @@
 
 Market data comes from app.state.market, a MarketGateway the hosting
 application provides (see backend/app/api/gateway.py)."""
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 
 import sqlalchemy as sa
@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.app.api.deps import get_auth_service, request_info, require_permission
 from backend.app.api.schemas import Page
 from backend.app.core.errors import AppError
-from backend.app.domain.profile import DEFAULT_ROW, ROW_SIZES
+from backend.app.domain.profile import DEFAULT_ROW, MAX_HISTORY_SESSIONS, ROW_SIZES
 from backend.app.infrastructure.postgres.schema import audit_logs
 from backend.app.services.auth.service import AuthService, AuthUser
 
@@ -97,6 +97,24 @@ async def session_profile(request: Request, date: str = Query(pattern=r"^\d{4}-\
     if profile is None:
         raise AppError("NOT_FOUND", f"no trades stored for {date}", 404)
     return profile
+
+
+@market_router.get("/profile/history", dependencies=[Depends(require_permission("market.read"))],
+                   summary="Finished sessions of the active contract, each an independent market profile")
+async def profile_history(request: Request, row: int = Query(DEFAULT_ROW),
+                          limit: int = Query(5, ge=1, le=MAX_HISTORY_SESSIONS),
+                          date_from: Optional[str] = Query(None, alias="from", pattern=r"^\d{4}-\d{2}-\d{2}$"),
+                          date_to: Optional[str] = Query(None, alias="to", pattern=r"^\d{4}-\d{2}-\d{2}$")):
+    if row not in ROW_SIZES:
+        raise AppError("INVALID_ROW", f"row must be one of {list(ROW_SIZES)}", 422)
+    try:
+        lo = date.fromisoformat(date_from) if date_from else None
+        hi = date.fromisoformat(date_to) if date_to else None
+    except ValueError:
+        raise AppError("INVALID_DATE", "dates must be valid YYYY-MM-DD", 422) from None
+    if lo and hi and (lo > hi or (hi - lo).days > 366):
+        raise AppError("INVALID_RANGE", "from must be on or before to, at most a year apart", 422)
+    return await _gateway(request).profile_history(row, limit, date_from, date_to)
 
 
 @market_router.get("/contracts", dependencies=[Depends(require_permission("market.read"))],

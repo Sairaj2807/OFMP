@@ -276,6 +276,20 @@ def test_session_profile_endpoint(env):
     assert client.get("/api/v1/market/profile?date=yesterday").status_code == 422
 
 
+def test_profile_history_endpoint_validates_its_inputs(env):
+    client, _, _ = env
+    assert client.get("/api/v1/market/profile/history").status_code == 401
+    register_and_login(client)
+    ok = client.get("/api/v1/market/profile/history?row=10&limit=20&from=2026-09-01&to=2026-10-07").json()
+    assert ok == {"row_size": 10, "limit": 20, "from": "2026-09-01", "to": "2026-10-07", "sessions": []}
+    assert client.get("/api/v1/market/profile/history").json()["limit"] == 5          # default
+    bad = {"row=3": "INVALID_ROW", "limit=51": "VALIDATION_ERROR", "limit=0": "VALIDATION_ERROR",
+           "from=2026-13-01": "INVALID_DATE", "from=yesterday": "VALIDATION_ERROR",
+           "from=2026-10-07&to=2026-10-01": "INVALID_RANGE", "from=2024-01-01&to=2026-01-01": "INVALID_RANGE"}
+    for q, code in bad.items():
+        assert client.get(f"/api/v1/market/profile/history?{q}").json()["error"]["code"] == code, q
+
+
 def test_contract_switch_needs_admin_system_and_is_audited(env):
     client, _, svc = env
     register_and_login(client, "user@example.com")

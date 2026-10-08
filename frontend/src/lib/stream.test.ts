@@ -185,4 +185,19 @@ describe("StreamClient replay", () => {
     client.replay("c2", "2026-09-29", { ppr: 1, interval: 60, view: "profile", row: 5 });
     expect(socket().sent.at(-1)).toMatchObject({ action: "replay", id: "c2", view: "profile", row: 5 });
   });
+
+  it("asks for profile history only when wanted and keeps it to the matching subscription", () => {
+    const hist: unknown[] = [];
+    const { client, socket } = setup({ onProfileHistory: (id, h) => hist.push([id, h.row_size]) });
+    client.start();
+    socket().open();
+    client.subscribe("c1", { ppr: 1, interval: 60, view: "profile", row: 5, days: 10 });
+    expect(socket().sent.at(-1)).toMatchObject({ action: "subscribe", view: "profile", row: 5, days: 10 });
+    socket().emit({ type: "profile_history", id: "c1", data: { row_size: 5, days: 10, sessions: [], excluded: [] } });
+    socket().emit({ type: "profile_history", id: "c1", data: { row_size: 2, days: 10, sessions: [], excluded: [] } });
+    socket().emit({ type: "profile_history", id: "c9", data: { row_size: 5, days: 10, sessions: [], excluded: [] } });
+    expect(hist).toEqual([["c1", 5]]);                       // stale row size and unknown ids ignored
+    client.subscribe("c1", { ppr: 1, interval: 60, view: "profile", row: 5, days: 0 });
+    expect(socket().sent.at(-1)).not.toHaveProperty("days");
+  });
 });

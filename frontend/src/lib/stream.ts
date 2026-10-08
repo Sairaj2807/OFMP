@@ -9,7 +9,7 @@
 // - Close 4403 (forbidden origin/permission): stops; retrying cannot help.
 // - "alert" messages (the user's alert rules firing) go to onAlert; they need
 //   no subscription.
-import type { AlertEvent, ChartSettings, ChartSnapshot, ServerMessage } from "./types";
+import type { AlertEvent, ChartSettings, ChartSnapshot, ProfileHistory, ServerMessage } from "./types";
 
 export type StreamStatus = "idle" | "connecting" | "open" | "reconnecting" | "unauthenticated" | "forbidden" | "stopped";
 
@@ -30,6 +30,7 @@ export interface StreamOptions {
   onStatus?: (status: StreamStatus, detail?: string) => void;
   onServerError?: (code: string, message: string, id?: string) => void;
   onAlert?: (event: AlertEvent) => void;
+  onProfileHistory?: (id: string, history: ProfileHistory) => void;
   onUnauthenticated?: () => Promise<boolean>;
   createSocket?: (url: string) => SocketLike;
   schedule?: (fn: () => void, ms: number) => unknown;
@@ -42,7 +43,8 @@ export interface StreamOptions {
 const OPEN = 1;
 
 /** The view fields of a subscribe/replay message (omitted for footprints: the server default). */
-const viewFields = (s: ChartSettings) => (s.view === "profile" ? { view: "profile", row: s.row ?? 5 } : {});
+const viewFields = (s: ChartSettings) => (s.view !== "profile" ? {}
+  : s.days ? { view: "profile", row: s.row ?? 5, days: s.days } : { view: "profile", row: s.row ?? 5 });
 
 type Subscription =
   | ({ kind: "live"; contract?: string } & ChartSettings)
@@ -175,6 +177,15 @@ export class StreamClient {
           sub.autoplay = snap.replay.playing;
         }
         this.o.onSnapshot(msg.id, snap);
+        break;
+      }
+      case "profile_history": {
+        const sub = msg.id ? this.subscriptions.get(msg.id) : undefined;
+        const h = msg.data as ProfileHistory | undefined;
+        // only for the live profile subscription it was requested for (row and days still current)
+        if (!sub || !msg.id || !h || sub.kind !== "live" || sub.view !== "profile") break;
+        if (h.row_size !== (sub.row ?? 5) || h.days !== (sub.days ?? 0)) break;
+        this.o.onProfileHistory?.(msg.id, h);
         break;
       }
       case "alert":

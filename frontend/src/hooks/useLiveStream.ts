@@ -9,6 +9,7 @@ import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 
 import { api } from "@/lib/api";
+import { historyBus } from "@/lib/profileHistory";
 import { snapshotBus } from "@/lib/snapshots";
 import { alertActions } from "./useAlerts";
 import { StreamClient, defaultStreamUrl } from "@/lib/stream";
@@ -42,9 +43,9 @@ export const useReplayMeta = create<{ meta: Record<string, ReplayMeta | undefine
 export const streamRef: { current: StreamClient | null } = { current: null };
 
 const keyOf = (c: { id: string; ppr: number; interval: number; mode: string; replayDate: string | null;
-                    view: string; profileRow: number }) =>
+                    view: string; profileRow: number; profileDays: number }) =>
   [c.id, c.ppr, c.interval, c.mode, c.mode === "replay" ? c.replayDate : "", c.view,
-   c.view === "profile" ? c.profileRow : ""].join("|");
+   c.view === "profile" ? c.profileRow : "", c.view === "profile" && c.mode === "live" ? c.profileDays : ""].join("|");
 
 export function useLiveStream(enabled: boolean): void {
   const sent = useRef(new Map<string, string>()); // id -> settings key last sent
@@ -74,6 +75,7 @@ export function useLiveStream(enabled: boolean): void {
         }
       },
       onAlert: (event) => alertActions.receive(event),
+      onProfileHistory: (id, history) => historyBus.publish(id, history),
       onUnauthenticated: () => api.refresh(),
     });
     streamRef.current = c;
@@ -94,8 +96,10 @@ export function useLiveStream(enabled: boolean): void {
       if (sent.current.get(id) === key) continue; // unchanged chart: nothing to send
       sent.current.set(id, key);
       const cfg = all.find((x) => x.id === id)!;
-      const settings = { ppr: cfg.ppr, interval: cfg.interval, view: cfg.view, row: cfg.profileRow };
+      const days = cfg.view === "profile" && cfg.mode === "live" ? cfg.profileDays : 0;   // history: live only
+      const settings = { ppr: cfg.ppr, interval: cfg.interval, view: cfg.view, row: cfg.profileRow, days };
       snapshotBus.forget(id);                 // a footprint must never be drawn as a profile, or vice versa
+      historyBus.publish(id, undefined);      // history of other settings must never be drawn
       if (cfg.mode === "replay" && cfg.replayDate) {
         c.replay(id, cfg.replayDate, settings);
       } else {

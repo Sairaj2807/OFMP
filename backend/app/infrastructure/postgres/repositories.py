@@ -73,6 +73,47 @@ async def previous_session_date(engine: AsyncEngine, provider: str, symbol: str,
         return (await conn.execute(stmt)).scalar_one_or_none()
 
 
+async def symbol_session_dates(engine: AsyncEngine, provider: str, symbol: str, before: date, limit: int,
+                               date_from: Optional[date] = None) -> list:
+    """The latest `limit` session dates before `before` (and from `date_from`, if given) with stored
+    trades of exactly `symbol`, oldest first. Untagged trades (NULL symbol) never match."""
+    stmt = (sa.select(trades.c.session_date)
+            .where(trades.c.provider == provider, trades.c.symbol == symbol, trades.c.session_date < before)
+            .group_by(trades.c.session_date).order_by(trades.c.session_date.desc()).limit(limit))
+    if date_from is not None:
+        stmt = stmt.where(trades.c.session_date >= date_from)
+    async with engine.connect() as conn:
+        return sorted(d for (d,) in (await conn.execute(stmt)).all())
+
+
+async def untagged_session_dates(engine: AsyncEngine, provider: str, before: date,
+                                 date_from: Optional[date] = None) -> list:
+    """Session dates before `before` holding trades with no symbol (recorded before contract tagging):
+    their contract is unknown, so they are never shown as history of a specific contract."""
+    stmt = (sa.select(trades.c.session_date)
+            .where(trades.c.provider == provider, trades.c.symbol.is_(None), trades.c.session_date < before)
+            .group_by(trades.c.session_date).order_by(trades.c.session_date))
+    if date_from is not None:
+        stmt = stmt.where(trades.c.session_date >= date_from)
+    async with engine.connect() as conn:
+        return [d for (d,) in (await conn.execute(stmt)).all()]
+
+
+async def load_symbol_sessions(engine: AsyncEngine, provider: str, symbol: str, dates: list) -> dict:
+    """{session_date: [(ts_ms, price, qty, side), ...] oldest first} for one contract and the given
+    dates: only what a market profile needs (no features JSONB), in one query."""
+    if not dates:
+        return {}
+    stmt = (sa.select(trades.c.session_date, trades.c.trade_ts, trades.c.price, trades.c.qty, trades.c.side)
+            .where(trades.c.provider == provider, trades.c.symbol == symbol, trades.c.session_date.in_(dates))
+            .order_by(trades.c.session_date, trades.c.trade_ts, trades.c.trade_seq))
+    out: dict = {d: [] for d in dates}
+    async with engine.connect() as conn:
+        for d, ts, price, qty, side in (await conn.execute(stmt)).all():
+            out[d].append((dt_to_ms(ts), price, qty, side))
+    return out
+
+
 async def raw_tick_count(engine: AsyncEngine) -> int:
     async with engine.connect() as conn:
         return (await conn.execute(sa.select(sa.func.count()).select_from(raw_ticks))).scalar_one()

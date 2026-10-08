@@ -295,6 +295,15 @@ test("market profile: sidebar switches one chart, the other stays a footprint", 
   await expect(page.getByRole("img", { name: "Market profile chart c2 (split)" })).toBeVisible();   // saved too
   await page.getByRole("region", { name: "Chart c2" }).getByRole("button", { name: "Stacked", exact: true }).click();
 
+  // multi-day: finished sessions + today on one price axis (the synthetic feed has no stored history,
+  // so only today's live column is drawn; the request and the column header are what is checked here)
+  await page.getByRole("region", { name: "Chart c2" }).getByLabel("Profile sessions").selectOption("5");
+  await expect(page.getByRole("img", { name: /^Multi-day market profile chart c2/ })).toBeVisible();
+  await expect(page.getByLabel("Market profile figures c2").getByLabel("Focused session")).toContainText("Today");
+  await expect(page.getByLabel("Market profile figures c2")).toContainText("POC", { timeout: 15_000 });
+  await page.getByRole("region", { name: "Chart c2" }).getByLabel("Profile sessions").selectOption("0");
+  await expect(page.getByRole("img", { name: /^Market profile chart c2/ })).toBeVisible();
+
   // keyboard: M toggles the focused chart back to a footprint
   await page.getByRole("region", { name: "Chart c2" }).click();
   await page.keyboard.press("m");

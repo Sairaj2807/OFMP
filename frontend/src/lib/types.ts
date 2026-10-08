@@ -118,6 +118,29 @@ export interface ChartSettings {
   interval: number;
   view?: ChartView;
   row?: number;                  // market profile row size, points
+  days?: number;                 // market profile: also the last N finished sessions (0 = today only)
+}
+
+/** One finished session of the active contract (an independent profile). */
+export interface ProfileHistorySession {
+  date: string;
+  symbol?: string;
+  state: "historical" | "error";
+  profile?: MarketProfile;
+  error?: string;
+}
+
+/** profile_history stream message: finished sessions, oldest first. Sent once, not every push. */
+export interface ProfileHistory {
+  symbol: string | null;
+  row_size: number;
+  tick_size?: number;
+  days: number;
+  live_date?: string;
+  version?: string;
+  sessions: ProfileHistorySession[];
+  excluded: { date: string; reason: string }[];
+  unavailable?: string;
 }
 
 /** One price row of a market profile (high to low in MarketProfile.rows). */
@@ -168,7 +191,8 @@ export interface MarketProfile {
 }
 
 export interface ServerMessage {
-  type: "welcome" | "subscribed" | "replay_started" | "unsubscribed" | "snapshot" | "ping" | "pong" | "error" | "alert";
+  type: "welcome" | "subscribed" | "replay_started" | "unsubscribed" | "snapshot" | "ping" | "pong" | "error" | "alert"
+    | "profile_history";
   seq: number;
   ts: number;
   id?: string;

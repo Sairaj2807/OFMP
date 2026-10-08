@@ -5,8 +5,9 @@ Protocol (JSON text frames):
   client -> server
     {"action": "auth", "token": "<access token>"}      only if no ofmp_access cookie; first message, within 5 s
     {"action": "subscribe", "id": "c1", "streams": ["chart"], "ppr": 1, "interval": 60, "contract": "NIFTY27OCT26FUT",
-     "view": "footprint" | "profile", "row": 5}
-                                          view "profile": a market profile at `row` points per row (ROW_SIZES)
+     "view": "footprint" | "profile", "row": 5, "days": 0}
+                                          view "profile": a market profile at `row` points per row (ROW_SIZES);
+                                          days > 0 (profile only): also the last `days` finished sessions
     {"action": "unsubscribe", "id": "c1"}         (no id: drop every subscription)
     {"action": "pong"}  /  {"action": "ping"}
     {"action": "replay", "id": "c1", "date": "2026-09-29", "ppr": 1, "interval": 60, "speed": 10,
@@ -25,6 +26,10 @@ Protocol (JSON text frames):
                   open connection of that user, no subscription needed
   Replay snapshots carry data.replay = {date, start_ms, end_ms, cursor_ms, index, total, playing, speed, speeds}.
   Profile snapshots (view "profile") carry data.view = "profile" and data.profile (see domain/profile).
+    profile_history   finished sessions for a profile subscription with days > 0 (data.sessions, oldest
+                      first, each an independent profile). Sent once after subscribing, and again only when
+                      the history changes (contract switch, new session) or the row / days change.
+                      The live snapshots keep carrying only today's profile, every push.
 
 Guarantees and limits:
   - Origin must match the Host (or be an allowed CORS origin): blocks cross-site WebSocket hijacking.
@@ -51,7 +56,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from backend.app.core import metrics
 from backend.app.core.permissions import has_permission
-from backend.app.domain.profile import DEFAULT_ROW, ROW_SIZES
+from backend.app.domain.profile import DEFAULT_ROW, MAX_HISTORY_SESSIONS, ROW_SIZES
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +94,7 @@ class SubscribeMsg(_Msg):
     contract: Optional[str] = Field(None, max_length=64)
     view: View = "footprint"
     row: int = DEFAULT_ROW
+    days: int = Field(0, ge=0, le=MAX_HISTORY_SESSIONS)
 
 
 class UnsubscribeMsg(_Msg):
@@ -147,6 +153,8 @@ class StreamConnection:
         self.ws, self.user, self.token = ws, user, token
         self.subscriptions: dict = {}      # live: id -> settings key, see view_key()
         self.replays: dict = {}            # replay: id -> {"session": ReplaySession, "key": settings key}
+        self.history: dict = {}            # profile history: id -> {"row", "days", "epoch", "gen"}
+        self.tasks: set = set()            # history sends in flight
         self.seq = 0
         self.last_seen = time.monotonic()
         self.snapshots_coalesced = 0
@@ -173,10 +181,12 @@ class StreamConnection:
         if sub_id is None:
             self.subscriptions.clear()
             self.replays.clear()
+            self.history.clear()
             self._pending.clear()
         else:
             self.subscriptions.pop(sub_id, None)
             self.replays.pop(sub_id, None)
+            self.history.pop(sub_id, None)
             self._pending.pop(sub_id, None)
 
     def ids(self) -> set:
@@ -260,6 +270,8 @@ class StreamHub:
         finally:
             self.connections.discard(conn)
             metrics.WS_CONNECTIONS.set(len(self.connections))
+            for task in list(conn.tasks):
+                task.cancel()
             sender.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await sender
@@ -312,10 +324,17 @@ class StreamHub:
         conn.replays.pop(msg.id, None)                  # back to live
         key = view_key(msg)
         conn.subscriptions[msg.id] = key
+        days = msg.days if msg.view == "profile" else 0
         await conn.send("subscribed", {"streams": msg.streams, "ppr": msg.ppr, "interval": msg.interval,
-                                       "view": msg.view, "row": msg.row,
+                                       "view": msg.view, "row": msg.row, "days": days,
                                        "contract": active.get("tradingsymbol") if active else None}, msg.id)
         conn.offer_snapshot(msg.id, self._live(key))
+        prev = conn.history.get(msg.id)
+        if days and not (prev and prev["row"] == msg.row and prev["days"] == days):
+            conn.history[msg.id] = {"row": msg.row, "days": days, "epoch": None, "gen": 0}
+            self._send_history(conn, msg.id)
+        elif not days:
+            conn.history.pop(msg.id, None)
 
     # -- replay ---------------------------------------------------------------------------
 
@@ -346,6 +365,7 @@ class StreamHub:
         if msg.autoplay:
             session.play()
         conn.subscriptions.pop(msg.id, None)            # this id now replays
+        conn.history.pop(msg.id, None)
         entry = conn.replays[msg.id] = {"session": session, "key": view_key(msg)}
         await conn.send("replay_started", session.meta(), msg.id)
         conn.offer_snapshot(msg.id, self._replay(entry))
@@ -373,6 +393,36 @@ class StreamHub:
             await conn.send("error", {"code": "INVALID_CONTROL", "message": str(e)}, msg.id)
             return
         conn.offer_snapshot(msg.id, self._replay(entry))
+
+    # -- profile history (static: sent once, not every push) ----------------------------------
+
+    def _history_epoch(self):
+        epoch = getattr(self.gateway, "history_epoch", None)
+        return epoch() if epoch else None
+
+    def _send_history(self, conn: StreamConnection, sub_id: str) -> None:
+        entry = conn.history[sub_id]
+        entry["gen"] += 1
+        entry["epoch"] = self._history_epoch()
+        task = asyncio.create_task(self._history_task(conn, sub_id, entry, entry["gen"]))
+        conn.tasks.add(task)
+        task.add_done_callback(conn.tasks.discard)
+
+    async def _history_task(self, conn: StreamConnection, sub_id: str, entry: dict, gen: int) -> None:
+        try:
+            data = await self.gateway.profile_history(entry["row"], entry["days"])
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("profile history failed")
+            data = None
+        if conn.history.get(sub_id) is not entry or entry["gen"] != gen:
+            return                                    # superseded (row / days changed, unsubscribed)
+        if data is None:
+            await conn.send("error", {"code": "PROFILE_HISTORY_FAILED",
+                                      "message": "historical profiles could not be loaded"}, sub_id)
+            return
+        await conn.send("profile_history", encode({**data, "days": entry["days"]}), sub_id)
 
     # -- snapshots -------------------------------------------------------------------------
 
@@ -405,7 +455,11 @@ class StreamHub:
         """Build each distinct subscription's snapshot once and offer it to its subscribers."""
         cache = {}      # settings key -> snapshot, built and JSON-encoded once per push
         metrics.WS_SUBSCRIPTIONS.set(sum(len(c.ids()) for c in self.connections))
+        epoch = self._history_epoch()
         for conn in list(self.connections):
+            for sub_id, entry in list(conn.history.items()):
+                if entry["epoch"] != epoch:            # contract switch or a new session: history changed
+                    self._send_history(conn, sub_id)
             for sub_id, key in list(conn.subscriptions.items()):
                 if key not in cache:
                     cache[key] = encode(self._live(key))

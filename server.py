@@ -13,6 +13,7 @@ import logging
 import os
 import time
 from datetime import date as date_cls
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import FastAPI, Request
@@ -31,9 +32,11 @@ from backend.app.infrastructure.providers.synthetic import SYNTHETIC_CONTRACT, S
 from backend.app.domain.orderflow import Trade, restore_trades
 from backend.app.domain.profile import ALL_DAY_SESSION, NSE_SESSION, SessionProfile, build_profile
 from backend.app.infrastructure.postgres.database import create_engine as create_db_engine
-from backend.app.infrastructure.postgres.repositories import (load_session_tape, load_trades_by_date,
-                                                              previous_session_date, trade_counts_by_session,
-                                                              upsert_instrument)
+from backend.app.infrastructure.postgres.repositories import (load_session_tape, load_symbol_sessions,
+                                                              load_trades_by_date, previous_session_date,
+                                                              symbol_session_dates, trade_counts_by_session,
+                                                              untagged_session_dates, upsert_instrument)
+from backend.app.services.profile_history import ProfileHistory
 from backend.app.services.replay import ReplayLibrary, ReplaySession
 from backend.app.infrastructure.postgres.rows import ist_date
 from backend.app.infrastructure.postgres.writer import MarketDataWriter
@@ -432,6 +435,35 @@ def _build_chart_snapshot(ppr: int = 1, interval_sec: int = config.CANDLE_INTERV
     }
 
 
+_PROFILE_HISTORY: Optional[ProfileHistory] = None
+
+
+def _profile_history() -> Optional[ProfileHistory]:
+    """Finished sessions of the active contract, from the database (None without one)."""
+    global _PROFILE_HISTORY
+    db = STATE.get("db_engine")
+    if db is None:
+        return None
+    if _PROFILE_HISTORY is None:
+        async def list_dates(symbol, before, limit, date_from):
+            return await symbol_session_dates(db, "angelone", symbol, before, limit, date_from)
+
+        async def load_days(symbol, dates):
+            return await load_symbol_sessions(db, "angelone", symbol, dates)
+
+        async def list_untagged(before, date_from):
+            return await untagged_session_dates(db, "angelone", before, date_from)
+        _PROFILE_HISTORY = ProfileHistory(list_dates, load_days, list_untagged)
+    return _PROFILE_HISTORY
+
+
+def _live_session_date() -> str:
+    """The live profile's session date (today, IST, before its first trade)."""
+    engine = STATE.get("engine")
+    date_ = getattr(getattr(engine, "profile", None), "date", None)
+    return date_ or ist_date(int(time.time() * 1000)).isoformat()
+
+
 def _profile_view(profile: SessionProfile, row: float) -> dict:
     return build_profile(profile, row) or {"date": None, "rows": [], "empty": True}
 
@@ -478,6 +510,29 @@ class ServerMarketGateway:
 
     def profile_snapshot(self, row: float) -> dict:
         return _build_profile_snapshot(row)
+
+    def history_epoch(self) -> tuple:
+        """Changes when the live contract or the live session changes: history must then be re-sent."""
+        contract = STATE.get("contract") or {}
+        return contract.get("tradingsymbol"), _live_session_date()
+
+    async def profile_history(self, row: float, limit: int, date_from: Optional[str] = None,
+                              date_to: Optional[str] = None) -> dict:
+        """Finished sessions of the active contract (see services/profile_history.py)."""
+        contract = STATE.get("contract") or {}
+        symbol, tick = contract.get("tradingsymbol"), contract.get("tick_size", 0.1)
+        live = _live_session_date()
+        before = date_cls.fromisoformat(live)
+        if date_to is not None:
+            before = min(before, date_cls.fromisoformat(date_to) + timedelta(days=1))
+        service = _profile_history()
+        if service is None or symbol is None:
+            return {"symbol": symbol, "row_size": row, "tick_size": tick, "before": before.isoformat(),
+                    "live_date": live, "sessions": [], "excluded": [],
+                    "unavailable": "history needs the database" if service is None else "no active contract"}
+        out = await service.history(symbol, tick, row, before=before, limit=limit,
+                                    date_from=date_cls.fromisoformat(date_from) if date_from else None)
+        return {**out, "live_date": live}
 
     async def session_profile(self, date: str, row: float) -> Optional[dict]:
         records = await _replay_library().records(date)

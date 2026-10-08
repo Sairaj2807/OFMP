@@ -103,6 +103,7 @@ Checked server-side on every route (`require_permission`).
 | GET | `/health` | — | summary |
 | GET | `/api/v1/market/status` | `market.read` | active contract, feed health, and `session` (NSE calendar: `open`, today's `session`, `holiday`, `next_open`, `calendar_covers_today`) |
 | GET | `/api/v1/market/contracts` | `market.read` | switchable contracts |
+| GET | `/api/v1/market/profile/history?row=&limit=&from=&to=` | `market.read` | finished sessions of the **active contract**, each an independent profile, oldest first: `{symbol, row_size, tick_size, version, before, live_date, sessions: [{date, symbol, state: "historical"\|"error", profile?, error?}], excluded: [{date, reason}]}`. `limit` 1–50 (default 5), `from`/`to` at most a year apart. Untagged (pre-tagging) sessions are listed in `excluded`, never included |
 | GET | `/api/v1/market/profile?date=&row=` | `market.read` | a stored session's market profile (`row` in points: 1, 2, 5, 10, 20, 50; default 5); `404` if nothing is stored. See `docs/market-profile.md` |
 | GET | `/api/v1/admin/users` | `admin.users` | cursor-paginated by email |
 | GET | `/api/v1/admin/system` | `admin.system` | feed, database writer, WebSocket stats |
@@ -242,7 +243,14 @@ message. That chart id then receives market profile snapshots: `data.view = "pro
 prints; tails; HVN/LVN; session figures; the previous session's levels), plus `status` and `quote`.
 
 Each chart id has its own view. Re-sending `replay` for the same date with another view keeps the
-position. An unsupported row size is rejected with `INVALID_ROW`. Definitions: `docs/market-profile.md`.
+position.
+
+**Multi-day.** Add `"days": N` (1–50) to a live profile `subscribe`. The server then also sends a
+`profile_history` message: the same structure as `GET /api/v1/market/profile/history`, plus `days`.
+- It is sent **once** after subscribing, and again only when the row size or `days` change, the contract is
+  switched, or a new session starts.
+- Snapshots keep carrying only today's live profile, every push.
+- `days` 0 (the default) means today only, as before. An unsupported row size is rejected with `INVALID_ROW`. Definitions: `docs/market-profile.md`.
 
 ### Replay over the stream
 

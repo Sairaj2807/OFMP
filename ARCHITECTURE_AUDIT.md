@@ -1113,3 +1113,45 @@ Done on 2026-10-01. Owner decisions:
 
 **Still open:** composite (week/month) profiles, value/POC migration, day types, Market Profile alert
 rules, and printed-only TPO marking as an option.
+
+## 25. Multi-day market profile on one shared price axis
+
+Done on 2026-10-08. It's a layer around the existing daily engine: the profile maths, classifier,
+footprint, replay and golden baselines are unchanged.
+
+**Backend:**
+- `repositories.symbol_session_dates` / `untagged_session_dates` / `load_symbol_sessions`: lean,
+  symbol-filtered, one query, no JSONB.
+- `services/profile_history.ProfileHistory`: the contract policy (tagged sessions of the active contract
+  only; untagged sessions excluded with a reason; nothing fabricated; per-day error isolation), per-day
+  `SessionProfile` + `build_profile`, and a two-level LRU cache keyed by `PROFILE_VERSION`. Requests are
+  logged.
+- Gateway `profile_history` / `history_epoch`; `GET /api/v1/market/profile/history` with validation.
+- Stream: `days` on `subscribe`; a `profile_history` message sent once, and re-sent only when the epoch
+  (contract, live session) or the row size / `days` change. A generation token drops superseded sends.
+
+**Frontend:**
+- `lib/chart/multiDay.ts`: columns, absolute price grid, layout, viewport, and the mapper (`priceToY` /
+  `yToPrice` / `sessionToX` / `xToSession`).
+- `MultiDayProfileChart`: per-column session drawing; a fixed price axis; a header that scrolls with the
+  columns; hit testing (session → price → that session's row); follow today.
+- Per-chart `profileDays` (layout format v5). History lives on its own bus, separate from the 2 Hz
+  snapshots.
+
+**Verified:**
+- 362 backend tests with the database, including 7 new history tests: independence, single-day parity,
+  replay parity, contract filtering, untagged exclusion, missing days, cache, row sizes, error isolation,
+  static history vs live today.
+- 1 stream protocol test: sent once, resent only on change.
+- 1 REST validation test.
+- 40 frontend unit tests, including 7 coordinate-model tests: same price → same Y across days, different
+  X, scrolling, hit testing, follow, split width.
+- 11/11 Playwright tests on the synthetic feed. Against the live market, the alerts test can time out,
+  because it needs a price crossing within 60 s.
+- Checked visually on live NIFTY27OCT26FUT: 30 Sep beside today, on one axis, showing the gap down.
+
+**Open:**
+- Multi-day in replay.
+- Continuous futures across expiries.
+- A contract backfill for the untagged September days.
+- A persistent profile cache.

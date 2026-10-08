@@ -4,6 +4,10 @@ from .engine import ALL_DAY_SESSION, LETTERS, NSE_SESSION, ProfileSession, Sessi
 
 ROW_SIZES = (1, 2, 5, 10, 20, 50)        # profile row sizes offered, in points
 DEFAULT_ROW = 5
+# Bump when the profile maths or its output changes: cached historical profiles are keyed by it.
+PROFILE_VERSION = "profile-v1"
+MAX_HISTORY_SESSIONS = 50
 
-__all__ = ["ALL_DAY_SESSION", "DEFAULT_ROW", "LETTERS", "NSE_SESSION", "ProfileSession", "ROW_SIZES",
+__all__ = ["ALL_DAY_SESSION", "DEFAULT_ROW", "LETTERS", "MAX_HISTORY_SESSIONS", "NSE_SESSION", "PROFILE_VERSION",
+           "ProfileSession", "ROW_SIZES",
            "SessionProfile", "VALUE_AREA_PCT", "build_profile", "letter", "poc_index", "value_area"]

@@ -26,6 +26,13 @@ class MarketGateway(Protocol):
     def profile_snapshot(self, row: float) -> dict:
         """The live market profile snapshot (data.view == "profile") at this row size, in points."""
 
+    def history_epoch(self) -> tuple:
+        """(active symbol, live session date): changes mean historical profiles must be re-sent."""
+
+    async def profile_history(self, row: float, limit: int, date_from: Optional[str] = None,
+                              date_to: Optional[str] = None) -> dict:
+        """Finished sessions of the active contract, each an independent profile, oldest first."""
+
     async def session_profile(self, date: str, row: float) -> Optional[dict]:
         """A stored session's whole market profile (None if nothing is stored for that date)."""
 
