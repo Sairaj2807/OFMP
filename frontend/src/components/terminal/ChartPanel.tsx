@@ -3,7 +3,6 @@
 import { useCallback } from "react";
 
 import { FootprintChart } from "@/components/chart/FootprintChart";
-import { MarketProfileChart } from "@/components/chart/MarketProfileChart";
 import { MultiDayProfileChart } from "@/components/chart/MultiDayProfileChart";
 import { Button, Select } from "@/components/ui/controls";
 import { type ChartStats, useLiveStats } from "@/hooks/useLiveStream";
@@ -105,10 +104,8 @@ export function ChartPanel({ config }: { config: ChartConfig }) {
       </div>
       {config.mode === "replay" && <ReplayBar config={config} />}
       <div className="min-h-0 flex-1">
-        {config.view === "profile" && config.mode === "live" && config.profileDays > 0
-          ? <MultiDayProfileChart key="profile-days" config={config} units={units} lotSize={lotSize} />
-          : config.view === "profile"
-          ? <MarketProfileChart key="profile" config={config} units={units} lotSize={lotSize} />
+        {config.view === "profile"
+          ? <MultiDayProfileChart key="profile" config={config} units={units} lotSize={lotSize} />
           : <FootprintChart key="footprint" config={config} units={units} lotSize={lotSize} tickSize={tickSize}
                             onStats={onStats} />}
       </div>

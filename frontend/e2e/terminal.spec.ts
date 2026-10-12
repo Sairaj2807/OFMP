@@ -310,3 +310,71 @@ test("market profile: sidebar switches one chart, the other stays a footprint", 
   await expect(page.getByTestId("profile-c2")).toHaveCount(0);
   await expect(page.getByTestId("chart-c2").locator("canvas").first()).toBeVisible();
 });
+
+test("market profile: drag pans, Ctrl+wheel zooms (saved), double-click follows, hover still reads rows", async ({ page }) => {
+  await openTerminal(page);
+  await page.getByRole("button", { name: "1 chart" }).click();
+  const chart = page.getByRole("region", { name: "Chart c1" });
+  await chart.getByRole("button", { name: "Live", exact: true }).click();
+  await chart.click();
+  await page.getByRole("button", { name: "Market profile on chart c1" }).click();
+  await chart.getByLabel("Profile sessions").selectOption("0");
+  await expect(page.getByLabel("Market profile figures c1")).toContainText("POC", { timeout: 15_000 });
+  const canvas = page.getByRole("img", { name: /^Market profile chart c1/ });
+  const follow = chart.getByRole("button", { name: "Follow today" });
+  await expect(follow).toHaveAttribute("aria-pressed", "true");
+
+  const box = (await canvas.boundingBox())!;
+  // the plot starts below the 34 px date header; following keeps the last price at the plot's centre
+  // a single day's column sits against the 64 px price axis: hover just left of the axis
+  const cx = box.x + box.width - 64 - 12, cy = box.y + 34 + (box.height - 34) / 2;
+  // hover on the last price row shows that row
+  await page.mouse.move(cx, cy);
+  await expect(chart.locator("div.num.pointer-events-none")).toContainText("TPO");
+
+  // drag: free view
+  await page.mouse.down();
+  await page.mouse.move(cx - 60, cy + 40, { steps: 5 });
+  await page.mouse.up();
+  await expect(follow).toHaveAttribute("aria-pressed", "false");
+  // double-click: follow again
+  await canvas.dblclick({ position: { x: box.width / 2, y: box.height / 2 } });
+  await expect(follow).toHaveAttribute("aria-pressed", "true");
+
+  // Ctrl+wheel zooms both axes; the zoom is saved with the chart and survives a reload
+  const zoomOf = () => page.evaluate(() => {
+    const c = JSON.parse(localStorage.getItem("ofmp.terminal")!).state.charts[0];
+    return [c.profileZoomY, c.profileZoomX];
+  });
+  await page.mouse.move(cx, cy);
+  await page.keyboard.down("Control");
+  await page.mouse.wheel(0, -300);
+  await page.keyboard.up("Control");
+  await expect.poll(async () => (await zoomOf())[0]).toBeGreaterThan(0);
+  const [zy, zx] = await zoomOf();
+  expect(zx).toBeGreaterThan(0);
+  await expect(page.getByRole("button", { name: /Workspace/ })).toContainText("Saved", { timeout: 5_000 });
+  await page.reload();
+  await expect(page.getByRole("button", { name: /Workspace/ })).toContainText(/Saved|Saving/);
+  expect(await zoomOf()).toEqual([zy, zx]);
+
+  // keyboard on the focused chart: 0 fits all (free view), F follows; the buttons do the same
+  const c2 = page.getByRole("img", { name: /^Market profile chart c1/ });
+  await c2.click();
+  await page.keyboard.press("0");
+  await expect(follow).toHaveAttribute("aria-pressed", "false");
+  await page.keyboard.press("f");
+  await expect(follow).toHaveAttribute("aria-pressed", "true");
+  await chart.getByRole("button", { name: "Zoom in" }).click();
+  await expect(follow).toHaveAttribute("aria-pressed", "false");
+  await chart.getByRole("button", { name: "Fit all" }).click();
+  await chart.getByRole("button", { name: "Follow today" }).click();
+  await expect(follow).toHaveAttribute("aria-pressed", "true");
+
+  // reset for other tests: fit zoom on both axes (double-click the price axis, then the header)
+  await canvas.dblclick({ position: { x: box.width - 20, y: box.height / 2 } });
+  await canvas.dblclick({ position: { x: 40, y: 10 } });
+  await expect.poll(zoomOf).toEqual([0, 0]);
+  await page.getByRole("button", { name: "Order-flow footprint on chart c1" }).click();
+});
+

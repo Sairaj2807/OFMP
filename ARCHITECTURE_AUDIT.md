@@ -1155,3 +1155,34 @@ footprint, replay and golden baselines are unchanged.
 - Continuous futures across expiries.
 - A contract backfill for the untagged September days.
 - A persistent profile cache.
+
+## 26. Market profile pan and zoom (both axes)
+
+Done on 2026-10-12. Frontend only.
+
+**Model:**
+- A continuous viewport (`topPrice`, `rowPx`, `leftX`, `colScale`, `follow`) replaces integer scrolling.
+- Pure, tested operations: zoom anchored at the cursor on each axis, pan, clamping (half a screen past the
+  data, short ranges centred, narrow content right-aligned), fit, and follow.
+- Column width is strictly proportional to `colScale`, so cursor anchoring is exact.
+
+**Interaction:** `useProfileViewport` maps drag, wheel, Ctrl+wheel/trackpad pinch, touch pinch, axis drags
+and wheels, double-clicks and keys to viewport actions. Redraws are coalesced to one per animation frame.
+
+**Rendering:**
+- The single-day chart now uses the same renderer (one column). The old `MarketProfileChart` was removed.
+- Previous-day reference lines are kept in single-day mode.
+- Level of detail: letters → blocks → thin bars; volume bars → vPOC tick; round axis label steps; sticky
+  date labels; replay is labelled.
+- Zoom levels are saved per chart (layout format v6).
+
+**Verified:**
+- 42 frontend unit tests, including 9 viewport tests: cursor anchoring on both axes, pan without zoom
+  change, the same Y across days after any pan or zoom, clamping/centring, fit, follow, level of detail,
+  label steps.
+- 12/12 Playwright tests, twice, including a gesture test: drag goes free, double-click follows, Ctrl+wheel
+  zoom is saved and survives a reload, `0` fit, `F` follow, the buttons, and hover after zoom.
+- Backend unchanged: 363 tests passed.
+
+**Not done:** a cached history layer (offscreen canvas). Culling plus frame-coalesced drawing was enough
+in testing. Per-day column resizing wasn't requested.

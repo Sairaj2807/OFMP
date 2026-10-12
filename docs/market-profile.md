@@ -120,6 +120,43 @@ active contract's finished sessions and today side by side.
   a year).
 - Multi-day applies to live charts; replay stays one session.
 
+## Pan and zoom (both axes)
+
+The single-day and multi-day profiles are the same chart: a single day is just one column.
+
+**What moves, and what doesn't:**
+- All days pan and zoom together, so the shared price axis stays aligned.
+- Zoom changes pixels, never data. The row size (points per row) stays your setting.
+
+| Gesture | Where | Action |
+|---|---|---|
+| Drag | plot | pan both axes, smoothly |
+| Wheel / Shift+wheel / sideways trackpad | plot | pan price / days |
+| Ctrl/⌘+wheel, trackpad pinch, two-finger touch pinch | plot | zoom both axes around the cursor |
+| Wheel or vertical drag | price axis | zoom price only |
+| Wheel or horizontal drag | date header | zoom days only |
+| Double-click | plot / price axis / header | follow today / fit price / fit days |
+| `+` `−` arrows `Home` `End` `0` `F` | focused chart | zoom, pan, first/last day, fit all, follow |
+| − + Fit Follow | on-chart buttons | the same, without a mouse or keyboard |
+
+**Behaviour:**
+- **Anchored zoom:** the price and day under the cursor stay put while zooming.
+- **Follow vs free:**
+  - Follow is the default: today is in view and the last price is centred.
+  - Any pan or zoom switches to free mode. In free mode the view holds still while live prices move or
+    history loads, and the same day stays at the left edge.
+- **Row-size change:** in free mode, the centre price is kept.
+- **Detail adapts to the zoom:**
+  - letters at 7 px and above, blocks below that, one thin bar per row at extreme zoom-out;
+  - volume bars below 30 px of width give way to a vPOC tick;
+  - price labels use round steps;
+  - date labels shorten, and a label sticks to the visible part of its column.
+- **Saved settings:** the zoom levels are saved per chart in the workspace. Pan position isn't saved, so a
+  reload starts by following today.
+- **Model:** the viewport functions (`zoomY`, `zoomX`, `panBy`, `clampViewport`, `fitZoom`, `followView`)
+  are pure, unit-tested functions in `frontend/src/lib/chart/multiDay.ts`. The gestures are in
+  `frontend/src/hooks/useProfileViewport.ts`.
+
 ## Not done yet
 
 - Composite profiles (week, month), value migration, and POC migration.

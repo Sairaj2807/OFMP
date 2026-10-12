@@ -31,6 +31,8 @@ export interface ChartConfig {
   profileRow: number;        // market profile row size, points
   profileMode: ProfileMode;  // stacked (letters packed left) or split (one column per period)
   profileDays: number;       // market profile: finished sessions shown left of today (0 = today only)
+  profileZoomY: number;      // market profile price zoom, px per row (0 = fit)
+  profileZoomX: number;      // market profile day-column zoom, width multiplier (0 = fit)
 }
 
 export const CHART_IDS = ["c1", "c2", "c3", "c4"] as const;
@@ -40,6 +42,7 @@ const defaultChart = (id: string, interval: number): ChartConfig => ({
   id, interval, ppr: 1, cellStyle: "profile", displayMode: "bidask",
   showPoc: true, showValueArea: true, showImbalances: true, mode: "live", replayDate: null,
   view: "footprint", profileRow: DEFAULT_PROFILE_ROW, profileMode: "stacked", profileDays: 0,
+  profileZoomY: 0, profileZoomX: 0,
 });
 
 /** The persisted/synced part of the terminal state. */
@@ -66,7 +69,7 @@ export const initialTerminal: TerminalConfig = {
 };
 
 export const STORAGE_KEY = "ofmp.terminal";
-export const STORAGE_VERSION = 5;
+export const STORAGE_VERSION = 6;
 
 /**
  * Brings any saved config (localStorage or a server workspace, any version)
@@ -76,6 +79,7 @@ export const STORAGE_VERSION = 5;
  *   v2 -> v3: charts gained view/profileRow (existing charts stay footprints, 5-point rows).
  *   v3 -> v4: charts gained profileMode (existing profiles stay stacked).
  *   v4 -> v5: charts gained profileDays (existing profiles show today only).
+ *   v5 -> v6: charts gained profileZoomY/profileZoomX (0 = fit, the previous behaviour).
  */
 export function migrateConfig(raw: unknown): TerminalConfig {
   const src = (raw && typeof raw === "object" ? raw : {}) as Partial<TerminalConfig>;
@@ -94,6 +98,12 @@ export function migrateConfig(raw: unknown): TerminalConfig {
     if (!(PROFILE_ROWS as readonly number[]).includes(c.profileRow)) c.profileRow = DEFAULT_PROFILE_ROW;
     if (c.profileMode !== "stacked" && c.profileMode !== "split") c.profileMode = "stacked";
     if (!(PROFILE_DAYS as readonly number[]).includes(c.profileDays)) c.profileDays = 0;
+    if (typeof c.profileZoomY !== "number" || !(c.profileZoomY === 0 || (c.profileZoomY >= 2 && c.profileZoomY <= 40))) {
+      c.profileZoomY = 0;
+    }
+    if (typeof c.profileZoomX !== "number" || !(c.profileZoomX === 0 || (c.profileZoomX >= 0.35 && c.profileZoomX <= 3))) {
+      c.profileZoomX = 0;
+    }
     for (const k of ["showPoc", "showValueArea", "showImbalances"] as const) if (typeof c[k] !== "boolean") c[k] = def[k];
     return c;
   });

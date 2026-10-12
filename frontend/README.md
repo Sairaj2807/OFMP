@@ -140,6 +140,15 @@ It works live and in replay. Definitions are in `docs/market-profile.md`.
 The coordinate model is `src/lib/chart/multiDay.ts` and the renderer is
 `components/chart/MultiDayProfileChart.tsx`.
 
+**Pan and zoom on both axes** (single-day and multi-day):
+- drag to pan;
+- Ctrl/⌘+wheel or pinch to zoom around the cursor;
+- wheel on the price axis zooms price, wheel on the date header zooms days;
+- double-click follows today, or fits that axis when on an axis;
+- keys `+` `−` `0` `F` and the arrows; on-chart − + Fit Follow buttons.
+
+Zoom levels are saved per chart. Details are in `docs/market-profile.md`.
+
 ## Keyboard
 
 | Key | Action |

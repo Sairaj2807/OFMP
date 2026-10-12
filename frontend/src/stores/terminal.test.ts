@@ -72,6 +72,9 @@ describe("config migration", () => {
     expect(v4.charts.map((c) => c.profileMode)).toEqual(["split", "stacked", "stacked", "stacked"]);
     const v5 = migrateConfig({ charts: [{ id: "c1", profileDays: 10 }, { id: "c2", profileDays: 7 }] });
     expect(v5.charts.map((c) => c.profileDays)).toEqual([10, 0, 0, 0]);
+    const v6 = migrateConfig({ charts: [{ id: "c1", profileZoomY: 12, profileZoomX: 1.5 },
+                                        { id: "c2", profileZoomY: 900, profileZoomX: "x" }] });
+    expect(v6.charts.map((c) => [c.profileZoomY, c.profileZoomX])).toEqual([[12, 1.5], [0, 0], [0, 0], [0, 0]]);
     expect(migrateConfig("garbage")).toEqual(initialTerminal);
   });
 });
