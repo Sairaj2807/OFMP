@@ -11,6 +11,7 @@ from typing import Optional
 
 from fastapi import FastAPI, Response, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from backend.app.core import metrics
 from backend.app.core.errors import install_error_handlers
@@ -35,6 +36,8 @@ def configure_api(app: FastAPI, *, environment: str, cookie_secure: bool, cors_o
         app.add_middleware(CORSMiddleware, allow_origins=cors_origins, allow_credentials=True,
                            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
                            allow_headers=["content-type", "x-csrf-token", "authorization", "x-request-id"])
+    # compress JSON responses (footprint history days are ~200 KB at 1-minute bars and compress well)
+    app.add_middleware(GZipMiddleware, minimum_size=4096)
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=max_request_bytes)
     app.add_middleware(RequestContextMiddleware)
     install_error_handlers(app)
@@ -87,6 +90,7 @@ def start_api(app: FastAPI, *, db_engine, jwt_secret: Optional[str], public_base
     With `redis` (an asyncio Redis client), rate limits are shared by every API process."""
     app.state.db_engine = db_engine
     app.state.market = gateway
+    app.state.allowed_intervals = tuple(allowed_intervals)
     if redis is not None:
         app.state.limiters = build_limiters(redis)
     if db_engine is not None and jwt_secret:

@@ -15,6 +15,7 @@ export const PROFILE_ROWS = [1, 2, 5, 10, 20, 50] as const;      // market profi
 export const DEFAULT_PROFILE_ROW = 5;
 export type ProfileMode = "stacked" | "split";
 export const PROFILE_DAYS = [0, 5, 10, 20] as const;                // finished sessions shown before today
+export const FOOTPRINT_DAYS = [0, 5, 10, 20] as const;              // capped by interval (lib/chart/footprintSessions)
 
 export interface ChartConfig {
   id: string;
@@ -33,6 +34,7 @@ export interface ChartConfig {
   profileDays: number;       // market profile: finished sessions shown left of today (0 = today only)
   profileZoomY: number;      // market profile price zoom, px per row (0 = fit)
   profileZoomX: number;      // market profile day-column zoom, width multiplier (0 = fit)
+  footprintDays: number;     // footprint: finished sessions to the left of today (0 = today only)
 }
 
 export const CHART_IDS = ["c1", "c2", "c3", "c4"] as const;
@@ -42,7 +44,7 @@ const defaultChart = (id: string, interval: number): ChartConfig => ({
   id, interval, ppr: 1, cellStyle: "profile", displayMode: "bidask",
   showPoc: true, showValueArea: true, showImbalances: true, mode: "live", replayDate: null,
   view: "footprint", profileRow: DEFAULT_PROFILE_ROW, profileMode: "stacked", profileDays: 0,
-  profileZoomY: 0, profileZoomX: 0,
+  profileZoomY: 0, profileZoomX: 0, footprintDays: 0,
 });
 
 /** The persisted/synced part of the terminal state. */
@@ -69,7 +71,7 @@ export const initialTerminal: TerminalConfig = {
 };
 
 export const STORAGE_KEY = "ofmp.terminal";
-export const STORAGE_VERSION = 6;
+export const STORAGE_VERSION = 7;
 
 /**
  * Brings any saved config (localStorage or a server workspace, any version)
@@ -80,6 +82,7 @@ export const STORAGE_VERSION = 6;
  *   v3 -> v4: charts gained profileMode (existing profiles stay stacked).
  *   v4 -> v5: charts gained profileDays (existing profiles show today only).
  *   v5 -> v6: charts gained profileZoomY/profileZoomX (0 = fit, the previous behaviour).
+ *   v6 -> v7: charts gained footprintDays (existing footprints show today only).
  */
 export function migrateConfig(raw: unknown): TerminalConfig {
   const src = (raw && typeof raw === "object" ? raw : {}) as Partial<TerminalConfig>;
@@ -101,6 +104,7 @@ export function migrateConfig(raw: unknown): TerminalConfig {
     if (typeof c.profileZoomY !== "number" || !(c.profileZoomY === 0 || (c.profileZoomY >= 2 && c.profileZoomY <= 40))) {
       c.profileZoomY = 0;
     }
+    if (!(FOOTPRINT_DAYS as readonly number[]).includes(c.footprintDays)) c.footprintDays = 0;
     if (typeof c.profileZoomX !== "number" || !(c.profileZoomX === 0 || (c.profileZoomX >= 0.35 && c.profileZoomX <= 3))) {
       c.profileZoomX = 0;
     }

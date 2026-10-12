@@ -1186,3 +1186,45 @@ and wheels, double-clicks and keys to viewport actions. Redraws are coalesced to
 
 **Not done:** a cached history layer (offscreen canvas). Culling plus frame-coalesced drawing was enough
 in testing. Per-day column resizing wasn't requested.
+
+## 27. Multi-day order-flow footprint
+
+Done on 2026-10-12.
+
+**Owner decisions:** CVD resets each session; day caps 1 m → 5, 3 m → 10, 5 m and above → 20.
+
+**Backend:**
+- The footprint payload builder moved to `backend/app/domain/orderflow/chart.py` (`chart_payload`), shared by
+  the live stream and history, with an optional `[since, until)` window and no bar limit.
+- `services/footprint_history.py` (`FootprintHistory`):
+  - lists the active contract's finished sessions (untagged days excluded with a reason);
+  - folds a day's stored trades through `restore_trades` once and caches the state (LRU 64);
+  - caches each built payload by date, row size and interval (LRU 512), so changing interval or row size
+    never reloads trades.
+- Sides are stored and never re-classified.
+- Endpoints: `GET /api/v1/market/footprint/sessions` and `/history` (see `docs/api.md`). Finished days are
+  immutable and ETag-cached; today comes from the live engine (`no-store`). Gzip is on for responses over
+  4 KB (a full 1 m day at 1 ₹/row is about 200 KB raw).
+
+**Frontend:**
+- `FootprintHistoryLoader` loads the list, today, then the newest finished day; older days load one at a
+  time when fewer than 20 columns are left of the view (checked after wheel, pointer-up and key events,
+  since the chart library has no range event).
+- One `Footprint` primitive per session, each with `cvdOffset` 0: session-reset CVD with no library
+  change. The newest layer scales the price axis on the visible columns; the others return no autoscale.
+- Prepending a day shifts the visible range by the number of added columns, so the view does not move.
+- `SessionMarks` draws the separators and sticky date labels.
+- Per-chart `footprintDays` (0/5/10/20) is saved in the workspace (layout v7).
+
+**Verified:**
+- Backend: 370 tests passed, including `tests/test_footprint_history.py` (each day equals a fresh build;
+  contracts never mix; caching; caps; gateway parity with replay; today from the live engine) and the
+  endpoint test (auth, caps, ETag/304, gzip, no-store, error codes). Golden regression unchanged.
+- Frontend: 47 unit tests (caps, IST dating, merge, session building, loader order and cap, labels);
+  13/13 Playwright tests, including a multi-day footprint test.
+- Checked by hand with two real stored sessions (30 Sep, 08 Oct, served to the browser through request
+  mocks): separators, sticky labels, TODAY, autoscale per view, view kept when a day is prepended, 30 Sep
+  loaded on reaching the left edge, then "Start of recorded history".
+
+**Limitations:** replay shows one session. Days recorded before contract tagging are excluded. Volume
+profile/statistics across several days are not part of this change.

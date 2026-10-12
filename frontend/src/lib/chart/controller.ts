@@ -4,12 +4,19 @@
 // setting changes to it, and destroys it. Behaviour ported from
 // static/orderflow.js (autoscale on visible columns, follow the right edge,
 // keep the inspected columns in place while data updates).
+//
+// Multi-day (applySessions): one footprint layer per session on one time axis,
+// each with its own CVD start, so CVD restarts at every session; a marks layer
+// draws the session separators and dates. Earlier sessions are prepended
+// without moving the columns in view.
 import type { Chart, Series } from "@/vendor/openalgo-charts/openalgo-charts.mjs";
 import type { Footprint, FootprintBar, FootprintHover } from "@/vendor/openalgo-charts/openalgo-charts.profile.mjs";
 
 import { bandRange, hasOhlc, toCandle, toFootprintBar } from "../adapter";
 import { istTime } from "../format";
-import type { ChartSnapshot } from "../types";
+import type { ChartSnapshot, EngineBar } from "../types";
+import { type FootprintSession, sessionStarts } from "./footprintSessions";
+import { SessionMarks } from "./sessionMarks";
 
 export const COLORS = {
   bg: "#12151b", grid: "#181c23", border: "#252b35", text: "#a3acba",
@@ -17,6 +24,15 @@ export const COLORS = {
 };
 const TRANSPARENT = "rgba(0,0,0,0)";
 const MIN_COLUMN_PX = 125;
+/** Ask for an earlier session when fewer than this many columns are left of the view. */
+export const LOAD_MORE_COLUMNS = 20;
+
+interface Group {
+  key: string;            // session date ("" in single-day mode)
+  bars: EngineBar[];
+  cvdOffset: number;
+  live?: boolean;
+}
 
 export interface DisplayOptions {
   cellStyle: string;
@@ -43,8 +59,15 @@ type ProfileModule = typeof import("@/vendor/openalgo-charts/openalgo-charts.pro
 
 export class FootprintController {
   private readonly chart: Chart;
-  private readonly footprint: Footprint;
+  private readonly footprint: Footprint;       // the newest session's layer; drives autoscale
+  private readonly layers = new Map<string, Footprint>();   // earlier sessions, by date
+  private readonly marks = new SessionMarks();
   private readonly series: Series;
+  private readonly newFootprint: () => Footprint;
+  private multi = false;
+  /** Multi-day mode: called after every pan or redraw with whether earlier sessions are nearly in view. */
+  onViewport: (nearStart: boolean) => void = () => {};
+  private dateOf = new Map<number, string>();
   private readonly observer: ResizeObserver;
   private bars: FootprintBar[] = [];
   private prevTimes: number[] = [];
@@ -81,7 +104,7 @@ export class FootprintController {
       style: { upColor: TRANSPARENT, downColor: TRANSPARENT, wickUpColor: TRANSPARENT, wickDownColor: TRANSPARENT,
                borderUpColor: TRANSPARENT, borderDownColor: TRANSPARENT },
     });
-    this.footprint = new libs.profile.Footprint({
+    this.newFootprint = () => new libs.profile.Footprint({
       textColorMode: "contrast", statsPosition: "bar", statsRows: ["volume", "delta", "deltaPct"], tableRows: [],
       pocStyle: "outline", valueAreaPercent: 0.7, imbalanceRatio: 3,
       widthFactor: 0.84, font: 11, radius: 1, statsRowHeight: 18, volumeDivisor: this.divisor(),
@@ -89,14 +112,20 @@ export class FootprintController {
       textColor: COLORS.cell, buyTextColor: "#8aefcd", sellTextColor: "#ffb2bd",
       ...FootprintController.displayOptions(display),
     });
+    this.display = display;
+    this.footprint = this.newFootprint();
     this.chart.addPrimitive(this.footprint);
+    this.chart.addPrimitive(this.marks);
 
     // Autoscale on the columns in (or next to) view, not every loaded column.
     const loadedExtent = this.footprint.autoscaleInfo.bind(this.footprint);
     this.footprint.autoscaleInfo = () => this.visibleExtent() ?? loadedExtent();
 
-    this.chart.on("crosshair:move", (e) =>
-      this.renderTooltip(e.point ? this.footprint.hoverAt(e.point.x, e.point.y) : null, e.point));
+    this.chart.on("crosshair:move", (e) => this.renderTooltip(e.point ? this.hoverAt(e.point.x, e.point.y) : null, e.point));
+
+    // The library has no visible-range event: look after every gesture that can pan.
+    const check = () => setTimeout(() => this.checkNearStart(), 0);
+    for (const ev of ["wheel", "pointerup", "keyup"]) container.addEventListener(ev, check, { passive: true });
 
     this.width = container.clientWidth;
     this.observer = new ResizeObserver(() => {
@@ -113,17 +142,32 @@ export class FootprintController {
              stackedImbalances: d.showImbalances ? 3 : 0 };
   }
 
+  private display: DisplayOptions;
+
+  private allLayers(): Footprint[] {
+    return [...this.layers.values(), this.footprint];
+  }
+
+  private hoverAt(x: number, y: number): FootprintHover | null {
+    for (const fp of this.allLayers()) {
+      const hit = fp.hoverAt(x, y);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
   private divisor(): number {
     return this.units.units === "lots" ? this.units.lotSize : 1;
   }
 
   setDisplay(display: DisplayOptions): void {
-    this.footprint.setOptions(FootprintController.displayOptions(display));
+    this.display = display;
+    for (const fp of this.allLayers()) fp.setOptions(FootprintController.displayOptions(display));
   }
 
   setUnits(units: UnitOptions): void {
     this.units = units;
-    this.footprint.setOptions({ volumeDivisor: this.divisor() });
+    for (const fp of this.allLayers()) fp.setOptions({ volumeDivisor: this.divisor() });
   }
 
   /** Refit the columns on the next snapshot (e.g. after an interval or row-size change). */
@@ -133,33 +177,70 @@ export class FootprintController {
 
   destroy(): void {
     this.observer.disconnect();
+    this.marks.setMarks([]);
     this.chart.destroy?.();
   }
 
+  /** Single-day mode: one live snapshot window. */
   apply(snap: ChartSnapshot): void {
     const ch = snap.chart;
     if (!ch) return;
-    this.rowSize = ch.row_size;
+    this.multi = false;
+    this.render([{ key: "", bars: ch.bars, cvdOffset: ch.cvd_offset }], ch.row_size);
+  }
+
+  /** Multi-day mode: sessions oldest first, today last. */
+  applySessions(sessions: FootprintSession[], rowSize: number): void {
+    this.multi = true;
+    this.render(sessions.map((s) => ({ key: s.date, bars: s.bars, cvdOffset: s.cvdStart, live: s.live })), rowSize);
+  }
+
+  private render(groups: Group[], rowSize: number): void {
+    this.rowSize = rowSize;
     const range = this.safeRange();
     const following = !this.prevTimes.length || !range || range.to >= this.prevTimes.length - 1.5;
 
-    const usable = ch.bars.filter(hasOhlc);
-    this.bars = usable.map((b) => toFootprintBar(b, ch.row_size));
+    const usable = groups.map((g) => ({ ...g, bars: g.bars.filter(hasOhlc) }));
+    const last = usable.at(-1);
+    const keep = new Set(usable.slice(0, -1).map((g) => g.key));
+    for (const [key, fp] of this.layers) {
+      if (!keep.has(key)) {
+        (this.chart as unknown as { removePrimitive(p: unknown): void }).removePrimitive(fp);
+        this.layers.delete(key);
+      }
+    }
+    this.bars = [];
+    this.dateOf = new Map();
+    const candles = [];
+    for (const g of usable) {
+      const fpBars = g.bars.map((b) => toFootprintBar(b, rowSize));
+      const fp = g === last ? this.footprint : this.layerFor(g.key);
+      fp.setOptions({ cvdOffset: g.cvdOffset, tickSize: rowSize });
+      fp.setBars(fpBars);
+      this.bars.push(...fpBars);
+      candles.push(...g.bars.map(toCandle));
+      if (this.multi) for (const b of g.bars) this.dateOf.set(b.time, g.key);
+    }
+    if (!last) this.footprint.setBars([]);
     const times = this.bars.map((b) => b.time);
-    this.series.setData(usable.map(toCandle));
-    this.footprint.setOptions({ cvdOffset: ch.cvd_offset, tickSize: ch.row_size });
-    this.footprint.setBars(this.bars);
+    this.series.setData(candles);
+    this.marks.setMarks(this.multi ? sessionStarts(usable.map((g) => ({
+      date: g.key, live: !!g.live, bars: g.bars, cvdStart: g.cvdOffset }))) : []);
 
     if (times.length) {
       const newBar = times[times.length - 1] !== this.prevTimes[this.prevTimes.length - 1];
+      // columns added (earlier sessions) or dropped (the live window) on the left
+      let offset = 0;
+      if (range && this.prevTimes.length) {
+        const at = times.indexOf(this.prevTimes[0]);
+        offset = at >= 0 ? at : -this.prevTimes.filter((t) => t < times[0]).length;
+      }
       if (this.forceFit || (newBar && following)) {
         this.fitColumns();
         this.forceFit = false;
-      } else if (!following && range && this.prevTimes.length) {
+      } else if (range && offset) {
         // keep the columns being inspected under the same part of the screen
-        const at = times.indexOf(this.prevTimes[0]);
-        const offset = at >= 0 ? at : -this.prevTimes.filter((t) => t < times[0]).length;
-        if (offset) this.chart.setVisibleLogicalRange({ from: range.from + offset, to: range.to + offset });
+        this.chart.setVisibleLogicalRange({ from: range.from + offset, to: range.to + offset });
       }
     }
     this.prevTimes = times;
@@ -167,6 +248,29 @@ export class FootprintController {
 
     const stats = this.footprint.stats().at(-1);
     this.onStats(stats ? { delta: stats.delta, cvd: stats.cvd, volume: stats.volume } : null);
+    setTimeout(() => this.checkNearStart(), 0);
+  }
+
+  private layerFor(key: string): Footprint {
+    let fp = this.layers.get(key);
+    if (!fp) {
+      fp = this.newFootprint();
+      fp.setOptions({ volumeDivisor: this.divisor(), ...FootprintController.displayOptions(this.display) });
+      fp.autoscaleInfo = () => null;              // the primary layer scales on every visible column
+      this.chart.addPrimitive(fp);
+      this.layers.set(key, fp);
+    }
+    return fp;
+  }
+
+  /** True while fewer than LOAD_MORE_COLUMNS columns are left of the view. */
+  nearStart(): boolean {
+    const range = this.safeRange();
+    return !!range && this.bars.length > 0 && range.from < LOAD_MORE_COLUMNS;
+  }
+
+  private checkNearStart(): void {
+    this.onViewport(this.multi && this.nearStart());
   }
 
   fitColumns(): void {
@@ -222,14 +326,16 @@ export class FootprintController {
       rows.push(["Sell × Buy", `${q(hit.cell.bidVol)} × ${q(hit.cell.askVol)}`]);
     }
     rows.push(["Volume", q(hit.stats.volume)], ["Buy", q(hit.stats.askVolume)], ["Sell", q(hit.stats.bidVolume)],
-      ["Delta", sq(hit.stats.delta)], ["Delta %", `${hit.stats.deltaPct.toFixed(1)}%`], ["CVD", sq(hit.stats.cvd)],
+      ["Delta", sq(hit.stats.delta)], ["Delta %", `${hit.stats.deltaPct.toFixed(1)}%`],
+      [this.multi ? "Session CVD" : "CVD", sq(hit.stats.cvd)],
       ["Min / max Δ", hit.stats.minDelta === null ? "—" : `${sq(hit.stats.minDelta)} / ${sq(hit.stats.maxDelta ?? 0)}`],
       ["Trades", hit.stats.trades == null ? "—" : String(hit.stats.trades)]);
 
     // DOM nodes and textContent only: no HTML strings.
     const title = document.createElement("div");
     title.className = "mb-1 text-fg-2";
-    title.textContent = `${istTime(hit.time)} IST · ${this.units.units === "lots" ? `lots (${this.units.lotSize}/lot)` : "quantity"}`;
+    const date = this.dateOf.get(hit.time);
+    title.textContent = `${date ? `${date} ` : ""}${istTime(hit.time)} IST · ${this.units.units === "lots" ? `lots (${this.units.lotSize}/lot)` : "quantity"}`;
     const body = rows.map(([k, v]) => {
       const row = document.createElement("div");
       row.className = "flex justify-between gap-4";

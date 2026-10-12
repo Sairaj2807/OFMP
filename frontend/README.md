@@ -149,6 +149,23 @@ The coordinate model is `src/lib/chart/multiDay.ts` and the renderer is
 
 Zoom levels are saved per chart. Details are in `docs/market-profile.md`.
 
+## Multi-day footprint
+
+**Footprint sessions** (live only) shows finished sessions of the active contract to the left of today:
+- the choice is capped by interval: 1 m → 5 days, 3 m → 10, 5 m and above → 20;
+- each session is its own footprint layer, so **CVD restarts at 0 at every session start** (the bottom bar
+  says "Session CVD");
+- a dashed separator and a date label (sticky while the day is in view, TODAY for the live session) mark
+  each session;
+- finished days load one at a time over HTTP as you scroll left (browser-cached, immutable); the status in
+  the corner says when the start of recorded history or the cap is reached, and lists excluded days on hover;
+- today = today's bars from the server merged with every live snapshot window, so bars older than the
+  60-bar live window stay on the chart.
+
+Replay shows one session. The pure logic is `src/lib/chart/footprintSessions.ts`; the controller gives each
+session its own layer (`src/lib/chart/controller.ts`), and `src/lib/chart/sessionMarks.ts` draws the marks.
+The setting is saved per chart (layout format v7).
+
 ## Keyboard
 
 | Key | Action |

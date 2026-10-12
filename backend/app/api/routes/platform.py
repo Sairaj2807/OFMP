@@ -7,7 +7,7 @@ from typing import Optional
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.api.deps import get_auth_service, request_info, require_permission
@@ -115,6 +115,38 @@ async def profile_history(request: Request, row: int = Query(DEFAULT_ROW),
     if lo and hi and (lo > hi or (hi - lo).days > 366):
         raise AppError("INVALID_RANGE", "from must be on or before to, at most a year apart", 422)
     return await _gateway(request).profile_history(row, limit, date_from, date_to)
+
+
+def _footprint_settings(request: Request, ppr: int, interval: int) -> None:
+    if not 1 <= ppr <= 5:
+        raise AppError("INVALID_PPR", "ppr must be 1-5", 422)
+    allowed = getattr(request.app.state, "allowed_intervals", None) or (60, 180, 300, 900, 1800)
+    if interval not in allowed:
+        raise AppError("INVALID_INTERVAL", f"interval must be one of {list(allowed)}", 422)
+
+
+@market_router.get("/footprint/sessions", dependencies=[Depends(require_permission("market.read"))],
+                   summary="Finished sessions of the active contract available as footprint history")
+async def footprint_sessions(request: Request, interval: int = Query(60)):
+    _footprint_settings(request, 1, interval)
+    return await _gateway(request).footprint_sessions(interval)
+
+
+@market_router.get("/footprint/history", dependencies=[Depends(require_permission("market.read"))],
+                   summary="One session as footprint bars (finished days are immutable and cacheable)")
+async def footprint_history(request: Request, date: str = Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),
+                            interval: int = Query(60), ppr: int = Query(1)):
+    _footprint_settings(request, ppr, interval)
+    day = await _gateway(request).footprint_day(date, ppr, interval)
+    if day is None:
+        raise AppError("NOT_FOUND", f"no footprint for {date}", 404)
+    if day.get("state") == "live":                              # today keeps changing
+        return JSONResponse(day, headers={"Cache-Control": "no-store"})
+    etag = f'"{day.get("version")}-{day.get("symbol")}-{date}-{ppr}-{interval}"'
+    headers = {"ETag": etag, "Cache-Control": "private, max-age=86400, immutable"}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return JSONResponse(day, headers=headers)
 
 
 @market_router.get("/contracts", dependencies=[Depends(require_permission("market.read"))],

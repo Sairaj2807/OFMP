@@ -186,6 +186,17 @@ class FakeGateway:
     async def profile_history(self, row, limit, date_from=None, date_to=None):
         return {"row_size": row, "limit": limit, "from": date_from, "to": date_to, "sessions": []}
 
+    async def footprint_sessions(self, interval_sec):
+        return {"interval_sec": interval_sec, "max_days": {60: 5, 180: 10}.get(interval_sec, 20), "sessions": []}
+
+    async def footprint_day(self, day, ppr, interval_sec):
+        if day == "2026-10-08":
+            return {"date": day, "state": "live", "bars": [], "interval_sec": interval_sec}
+        if day == "2026-10-07":
+            return {"date": day, "state": "historical", "version": "footprint-v1", "symbol": "NIFTYOCT",
+                    "bars": [{"time": 1, "delta": 0, "cells": []}] * 400, "interval_sec": interval_sec, "row_size": ppr}
+        return None
+
 
 def user(role="user"):
     return AuthUser(uuid.UUID(int=1), "u@example.com", "U", role, True, uuid.UUID(int=2))

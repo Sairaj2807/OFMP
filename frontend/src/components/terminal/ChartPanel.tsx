@@ -6,9 +6,12 @@ import { FootprintChart } from "@/components/chart/FootprintChart";
 import { MultiDayProfileChart } from "@/components/chart/MultiDayProfileChart";
 import { Button, Select } from "@/components/ui/controls";
 import { type ChartStats, useLiveStats } from "@/hooks/useLiveStream";
+import { dayCap } from "@/lib/chart/footprintSessions";
 import { intervalLabel } from "@/lib/format";
 import { useSession } from "@/stores/session";
-import { type CellStyle, type ChartConfig, type DisplayMode, PROFILE_DAYS, PROFILE_ROWS, useTerminal } from "@/stores/terminal";
+import {
+  type CellStyle, type ChartConfig, type DisplayMode, FOOTPRINT_DAYS, PROFILE_DAYS, PROFILE_ROWS, useTerminal,
+} from "@/stores/terminal";
 import { ReplayBar, loadReplaySessions } from "./ReplayBar";
 
 export function ChartPanel({ config }: { config: ChartConfig }) {
@@ -79,6 +82,14 @@ export function ChartPanel({ config }: { config: ChartConfig }) {
               ))}
             </div>
             <span className="mx-1 h-4 w-px bg-line" aria-hidden />
+            <Select label="Footprint sessions" value={Math.min(config.footprintDays, dayCap(config.interval))}
+                    disabled={config.mode === "replay"}
+                    title={config.mode === "replay" ? "Replay shows one session"
+                      : `Finished sessions to the left of today (at most ${dayCap(config.interval)} at ${intervalLabel(config.interval)}); CVD restarts each session`}
+                    onChange={(e) => update(config.id, { footprintDays: Number(e.target.value) })}>
+              {FOOTPRINT_DAYS.filter((n) => n <= dayCap(config.interval)).map((n) =>
+                <option key={n} value={n}>{n === 0 ? "Today" : `${n} days + today`}</option>)}
+            </Select>
             <Select label="Price per row" value={config.ppr} onChange={(e) => update(config.id, { ppr: Number(e.target.value) })}>
               {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n} ₹/row</option>)}
             </Select>

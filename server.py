@@ -13,6 +13,7 @@ import logging
 import os
 import time
 from datetime import date as date_cls
+from datetime import datetime
 from datetime import timedelta
 from typing import Optional
 
@@ -23,22 +24,24 @@ from fastapi.staticfiles import StaticFiles
 import angel_client
 import config
 from observation_store import ObservationStore, list_replayable_sessions, load_session_records
-from orderbook_engine import TickProcessorState, group_native_bars, process_tick
+from orderbook_engine import TickProcessorState, process_tick
 from backend.app.api.app import configure_api, start_api
 from backend.app.core import metrics
 from backend.app.core.logging import configure_logging
 from backend.app.domain.market_data import MarketTick
 from backend.app.infrastructure.providers.synthetic import SYNTHETIC_CONTRACT, SyntheticProvider
 from backend.app.domain.orderflow import Trade, restore_trades
+from backend.app.domain.orderflow.chart import chart_payload
 from backend.app.domain.profile import ALL_DAY_SESSION, NSE_SESSION, SessionProfile, build_profile
 from backend.app.infrastructure.postgres.database import create_engine as create_db_engine
 from backend.app.infrastructure.postgres.repositories import (load_session_tape, load_symbol_sessions,
                                                               load_trades_by_date, previous_session_date,
                                                               symbol_session_dates, trade_counts_by_session,
                                                               untagged_session_dates, upsert_instrument)
+from backend.app.services.footprint_history import FootprintHistory, day_cap
 from backend.app.services.profile_history import ProfileHistory
 from backend.app.services.replay import ReplayLibrary, ReplaySession
-from backend.app.infrastructure.postgres.rows import ist_date
+from backend.app.infrastructure.postgres.rows import IST, ist_date
 from backend.app.infrastructure.postgres.writer import MarketDataWriter
 from backend.app.services.market_data.feeds import EmbeddedFeed, RedisFeed
 from backend.app.services.market_data.recorder import RawTickRecorder
@@ -370,45 +373,10 @@ def _clamp_chart_interval(value) -> int:
 def _chart_payload(fp, closed_cvd: int, open_ts: Optional[int], ppr: int,
                    interval_sec: int = config.CANDLE_INTERVAL_SEC,
                    limit: int = CHART_BARS) -> dict:
-    """The last `limit` candles as footprint columns, at `interval_sec` (one of
-    config.ALLOWED_CHART_INTERVALS_SEC — see group_native_bars for why the
-    engine itself never buckets at anything but the native 60s interval).
-
-    `closed_cvd` is the engine's CVD over every CLOSED native candle
-    (cvd_tracker.cvd), `open_ts` the still-forming native candle
-    (last_candle_seen). The chart library accumulates CVD itself from
-    `cvd_offset` across the bars it is given (including the forming one), so
-    cvd_offset is the CVD just before the first bar sent: everything closed,
-    minus the closed NATIVE candles in the native window this pulls from
-    (grouping a closed and a still-forming native candle into one coarser
-    display bar doesn't change which native candles are closed).
-    Cell prices are the PPR band FLOOR, as everywhere else in the engine; the
-    adapter shifts them to the band centre, which is what the library draws
-    around."""
-    row_size = max(ppr, fp.tick_size)
-    multiple = max(1, interval_sec // config.CANDLE_INTERVAL_SEC)
-    window = sorted(fp.data.keys())[-(limit * multiple):]
-    native_bars = []
-    closed_in_window = 0
-    for ts in window:
-        delta = fp.candle_delta(ts)
-        if ts != open_ts:
-            closed_in_window += delta
-        ohlc = fp.candle_ohlc.get(ts) or {}
-        stats = fp.candle_stats.get(ts) or {}
-        native_bars.append({
-            "time": ts,
-            "open": ohlc.get("open"), "high": ohlc.get("high"),
-            "low": ohlc.get("low"), "close": ohlc.get("close"),
-            "delta": delta,
-            "min_delta": stats.get("min"), "max_delta": stats.get("max"),
-            "trades": stats.get("trades"),
-            "cells": [{"price": r.price, "buy": r.buy_volume, "sell": r.sell_volume}
-                      for r in fp.get_candle_rows(ts, ppr)],
-        })
-    bars = group_native_bars(native_bars, interval_sec, config.CANDLE_INTERVAL_SEC)[-limit:]
-    return {"row_size": row_size, "interval_sec": interval_sec,
-            "cvd_offset": closed_cvd - closed_in_window, "bars": bars}
+    """The last `limit` candles as footprint columns (see domain/orderflow/chart.py,
+    shared with replay and historical sessions)."""
+    return chart_payload(fp, closed_cvd, open_ts, ppr, interval_sec=interval_sec, limit=limit,
+                         native_sec=config.CANDLE_INTERVAL_SEC)
 
 
 def _source_info() -> dict:
@@ -455,6 +423,34 @@ def _profile_history() -> Optional[ProfileHistory]:
             return await untagged_session_dates(db, "angelone", before, date_from)
         _PROFILE_HISTORY = ProfileHistory(list_dates, load_days, list_untagged)
     return _PROFILE_HISTORY
+
+
+_FOOTPRINT_HISTORY: Optional[FootprintHistory] = None
+
+
+def _footprint_history() -> Optional[FootprintHistory]:
+    """Finished sessions of the active contract as footprint bars (None without a database)."""
+    global _FOOTPRINT_HISTORY
+    db = STATE.get("db_engine")
+    if db is None:
+        return None
+    if _FOOTPRINT_HISTORY is None:
+        async def list_dates(symbol, before, limit, date_from):
+            return await symbol_session_dates(db, "angelone", symbol, before, limit, date_from)
+
+        async def load_days(symbol, dates):
+            return await load_symbol_sessions(db, "angelone", symbol, dates)
+
+        async def list_untagged(before, date_from):
+            return await untagged_session_dates(db, "angelone", before, date_from)
+        _FOOTPRINT_HISTORY = FootprintHistory(list_dates, load_days, list_untagged)
+    return _FOOTPRINT_HISTORY
+
+
+def _ist_day_bounds(day: str) -> tuple:
+    """[start, end) of an IST calendar day in epoch seconds."""
+    start = int(datetime.combine(date_cls.fromisoformat(day), datetime.min.time(), IST).timestamp())
+    return start, start + 86_400
 
 
 def _live_session_date() -> str:
@@ -533,6 +529,46 @@ class ServerMarketGateway:
         out = await service.history(symbol, tick, row, before=before, limit=limit,
                                     date_from=date_cls.fromisoformat(date_from) if date_from else None)
         return {**out, "live_date": live}
+
+    async def footprint_sessions(self, interval_sec: int) -> dict:
+        """Finished sessions of the active contract available for the footprint, newest
+        day_cap(interval) of them, plus the excluded (untagged) ones."""
+        contract = STATE.get("contract") or {}
+        symbol, live = contract.get("tradingsymbol"), _live_session_date()
+        cap = day_cap(interval_sec)
+        service = _footprint_history()
+        base = {"symbol": symbol, "live_date": live, "interval_sec": interval_sec, "max_days": cap}
+        if service is None or symbol is None:
+            return {**base, "sessions": [], "excluded": [],
+                    "unavailable": "history needs the database" if service is None else "no active contract"}
+        return {**await service.sessions(symbol, date_cls.fromisoformat(live), cap), **base}
+
+    async def footprint_day(self, day: str, ppr: int, interval_sec: int) -> Optional[dict]:
+        """One session as footprint bars: a finished day from the history cache, or today
+        (every bar of today so far) from the live engine."""
+        contract = STATE.get("contract") or {}
+        symbol, tick, live = contract.get("tradingsymbol"), contract.get("tick_size", 0.1), _live_session_date()
+        if symbol is None:
+            return None
+        if day == live:
+            engine = STATE.get("engine")
+            if engine is None:
+                return None
+            fp = engine.footprint
+            since, until = _ist_day_bounds(day)
+            before = [t for t in fp.data if t < since]
+            closed_before = sum(fp.candle_delta(t) for t in before)    # an engine running overnight: earlier days
+            payload = chart_payload(fp, engine.cvd_tracker.cvd - closed_before, engine.last_candle_seen, ppr,
+                                    interval_sec=interval_sec, limit=None, since=since, until=until,
+                                    native_sec=config.CANDLE_INTERVAL_SEC)
+            return {"date": day, "symbol": symbol, "state": "live", "interval_sec": interval_sec,
+                    "row_size": payload["row_size"], "cvd_start": payload["cvd_offset"], "bars": payload["bars"]}
+        if day >= live:
+            return None
+        service = _footprint_history()
+        if service is None:
+            return None
+        return await service.day(symbol, tick, date_cls.fromisoformat(day), ppr, interval_sec)
 
     async def session_profile(self, date: str, row: float) -> Optional[dict]:
         records = await _replay_library().records(date)

@@ -4,10 +4,17 @@
 // library, loaded on demand), feeds it snapshots from the snapshot bus and
 // forwards setting changes; all drawing happens inside the controller, so
 // the 2 Hz stream never re-renders this component.
-import { useEffect, useRef } from "react";
+//
+// Multi-day (live, "N days + today"): finished sessions load one day at a time
+// over HTTP as the user scrolls left; today is today's bars from the server
+// merged with every live snapshot window (lib/chart/footprintSessions).
+import { useEffect, useRef, useState } from "react";
 
+import { api } from "@/lib/api";
 import { type BarStats, FootprintController } from "@/lib/chart/controller";
+import { buildSessions, effectiveDays, FootprintHistoryLoader, mergeBars } from "@/lib/chart/footprintSessions";
 import { snapshotBus } from "@/lib/snapshots";
+import type { ChartSnapshot, EngineBar } from "@/lib/types";
 import type { ChartConfig, Units } from "@/stores/terminal";
 
 interface Props {
@@ -18,13 +25,18 @@ interface Props {
   onStats?: (stats: BarStats | null) => void;
 }
 
+const RETRY_MS = 5000;
+
 export function FootprintChart({ config, units, lotSize, tickSize, onStats }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const emptyRef = useRef<HTMLDivElement>(null);
+  const statusRef = useRef<HTMLDivElement>(null);
   const controllerRef = useRef<FootprintController | null>(null);
+  const [ready, setReady] = useState(false);
   const onStatsRef = useRef(onStats);
-  const { id, cellStyle, displayMode, showPoc, showValueArea, showImbalances, ppr, interval } = config;
+  const { id, cellStyle, displayMode, showPoc, showValueArea, showImbalances, ppr, interval, mode, footprintDays } = config;
+  const days = mode === "live" ? effectiveDays(footprintDays, interval) : 0;
 
   useEffect(() => {
     onStatsRef.current = onStats;
@@ -43,26 +55,123 @@ export function FootprintChart({ config, units, lotSize, tickSize, onStats }: Pr
     const empty = emptyRef.current;
     if (!container || !tooltip || !empty) return;
     let disposed = false;
-    let unsubscribe = () => {};
 
     Promise.all([
       import("@/vendor/openalgo-charts/openalgo-charts.mjs"),
       import("@/vendor/openalgo-charts/openalgo-charts.profile.mjs"),
     ]).then(([chart, profile]) => {
       if (disposed) return;
-      const controller = new FootprintController(container, tooltip, empty, { chart, profile },
+      controllerRef.current = new FootprintController(container, tooltip, empty, { chart, profile },
         initial.current.display, initial.current.units, (s) => onStatsRef.current?.(s));
-      controllerRef.current = controller;
-      unsubscribe = snapshotBus.subscribe(id, (snap) => controller.apply(snap));
+      setReady(true);
     });
 
     return () => {
       disposed = true;
-      unsubscribe();
       controllerRef.current?.destroy();
       controllerRef.current = null;
+      setReady(false);
     };
   }, [id]);
+
+  // Feed the controller: the live window as is, or sessions when earlier days are shown.
+  useEffect(() => {
+    const ctl = controllerRef.current;
+    const status = statusRef.current;
+    if (!ready || !ctl || !status) return;
+    const showStatus = (text: string, title = "") => {
+      status.textContent = text;
+      status.title = title;
+      status.hidden = !text;
+      status.dataset.kind = "";
+    };
+    showStatus("");
+    ctl.requestFit();
+    if (!days) {
+      ctl.onViewport = () => {};
+      return snapshotBus.subscribe(id, (snap) => ctl.apply(snap));
+    }
+
+    const loader = new FootprintHistoryLoader({ sessions: api.footprintSessions, day: api.footprintDay }, interval, ppr, days);
+    const today = new Map<number, EngineBar>();
+    let rowSize = 0;
+    let started = false;
+    let latest: ChartSnapshot | null = null;
+    let failedAt = 0;
+
+    // a snapshot of other settings (before the stream re-subscribes) is never merged
+    const fits = (snap: ChartSnapshot) => !!snap.chart && snap.mode !== "replay" && snap.chart.interval_sec === interval
+      && (!rowSize || snap.chart.row_size === rowSize);
+    const redraw = () => {
+      if (loader.stale() || !rowSize) return;
+      const sessions = buildSessions(loader.days, loader.liveDate ? { date: loader.liveDate, bars: today } : null);
+      ctl.applySessions(sessions, rowSize);
+    };
+    const merge = (snap: ChartSnapshot) => {
+      if (!snap.chart || !loader.liveDate) return;
+      rowSize = snap.chart.row_size;
+      mergeBars(today, snap.chart.bars, loader.liveDate);
+    };
+    const loadOlder = () => {
+      if (loader.loading || loader.exhausted || Date.now() - failedAt < RETRY_MS) return;
+      showStatus("Loading earlier session…");
+      loader.loadOlder().then((added) => {
+        if (loader.stale()) return;
+        showStatus("");
+        if (added) redraw();
+      }, () => {
+        if (loader.stale()) return;
+        failedAt = Date.now();
+        showStatus("Could not load the earlier session; retrying when you scroll");
+      });
+    };
+    ctl.onViewport = (near) => {
+      if (!started || !near) {
+        if (started && status.dataset.kind === "start") showStatus("");
+        return;
+      }
+      if (!loader.exhausted) return loadOlder();
+      const excluded = loader.excluded.map((e) => `${e.date}: ${e.reason}`).join("\n");
+      showStatus(loader.available.length >= loader.cap ? `Showing ${loader.cap} earlier sessions (the most for this interval)`
+        : "Start of recorded history", excluded ? `Not shown:\n${excluded}` : "");
+      status.dataset.kind = "start";
+    };
+
+    const unsubscribe = snapshotBus.subscribe(id, (snap) => {
+      if (!fits(snap)) return;
+      if (!started) {
+        latest = snap;
+        ctl.apply(snap);              // the live window until the sessions arrive
+        return;
+      }
+      merge(snap);
+      redraw();
+    });
+
+    showStatus("Loading sessions…");
+    loader.start().then(() => {
+      if (loader.stale()) return;
+      started = true;
+      showStatus("");
+      if (loader.today && loader.liveDate) {
+        rowSize = loader.today.row_size;
+        mergeBars(today, loader.today.bars, loader.liveDate);
+      }
+      if (latest && fits(latest)) merge(latest);
+      if (!rowSize && loader.days.size) rowSize = [...loader.days.values()][0].row_size;
+      redraw();
+    }, () => {
+      if (loader.stale()) return;
+      showStatus("Earlier sessions are unavailable; showing today");
+      started = false;
+    });
+
+    return () => {
+      loader.dispose();
+      unsubscribe();
+      ctl.onViewport = () => {};
+    };
+  }, [ready, id, days, interval, ppr]);
 
   useEffect(() => {
     controllerRef.current?.setDisplay({ cellStyle, displayMode, showPoc, showValueArea, showImbalances });
@@ -72,10 +181,6 @@ export function FootprintChart({ config, units, lotSize, tickSize, onStats }: Pr
     controllerRef.current?.setUnits({ units, lotSize, tickSize });
   }, [units, lotSize, tickSize]);
 
-  useEffect(() => {
-    controllerRef.current?.requestFit();
-  }, [ppr, interval]);
-
   return (
     <div className="relative h-full w-full" data-testid={`chart-${id}`}>
       {/* the chart library sets its own role/label/tabindex on this container */}
@@ -83,6 +188,8 @@ export function FootprintChart({ config, units, lotSize, tickSize, onStats }: Pr
       <div ref={emptyRef} className="pointer-events-none absolute inset-0 grid place-items-center text-muted">
         Waiting for the first trade…
       </div>
+      <div ref={statusRef} hidden data-testid={`footprint-status-${id}`} role="status"
+           className="absolute bottom-8 left-2 z-10 rounded border border-line bg-raised/90 px-2 py-0.5 text-[11px] text-muted" />
       <div
         ref={tooltipRef}
         hidden

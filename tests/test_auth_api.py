@@ -290,6 +290,26 @@ def test_profile_history_endpoint_validates_its_inputs(env):
         assert client.get(f"/api/v1/market/profile/history?{q}").json()["error"]["code"] == code, q
 
 
+def test_footprint_history_endpoints(env):
+    client, _, _ = env
+    assert client.get("/api/v1/market/footprint/sessions").status_code == 401
+    register_and_login(client)
+    assert client.get("/api/v1/market/footprint/sessions?interval=180").json()["max_days"] == 10
+    r = client.get("/api/v1/market/footprint/history?date=2026-10-07&interval=60&ppr=2")
+    assert r.status_code == 200 and r.json()["row_size"] == 2
+    assert "immutable" in r.headers["cache-control"] and r.headers["etag"]
+    assert r.headers.get("content-encoding") == "gzip"                       # large days are compressed
+    again = client.get("/api/v1/market/footprint/history?date=2026-10-07&interval=60&ppr=2",
+                       headers={"If-None-Match": r.headers["etag"]})
+    assert again.status_code == 304
+    live = client.get("/api/v1/market/footprint/history?date=2026-10-08&interval=300")
+    assert live.status_code == 200 and live.headers["cache-control"] == "no-store"
+    assert client.get("/api/v1/market/footprint/history?date=2026-10-01").json()["error"]["code"] == "NOT_FOUND"
+    for q, code in {"interval=61": "INVALID_INTERVAL", "ppr=9": "INVALID_PPR", "date=bad": "VALIDATION_ERROR"}.items():
+        url = "/api/v1/market/footprint/history?" + ("" if q.startswith("date") else "date=2026-10-07&") + q
+        assert client.get(url).json()["error"]["code"] == code, q
+
+
 def test_contract_switch_needs_admin_system_and_is_audited(env):
     client, _, svc = env
     register_and_login(client, "user@example.com")

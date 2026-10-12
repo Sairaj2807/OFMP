@@ -319,6 +319,7 @@ test("market profile: drag pans, Ctrl+wheel zooms (saved), double-click follows,
   await chart.click();
   await page.getByRole("button", { name: "Market profile on chart c1" }).click();
   await chart.getByLabel("Profile sessions").selectOption("0");
+  await chart.getByRole("button", { name: "Stacked", exact: true }).click();     // saved state may hold Split
   await expect(page.getByLabel("Market profile figures c1")).toContainText("POC", { timeout: 15_000 });
   const canvas = page.getByRole("img", { name: /^Market profile chart c1/ });
   const follow = chart.getByRole("button", { name: "Follow today" });
@@ -378,3 +379,33 @@ test("market profile: drag pans, Ctrl+wheel zooms (saved), double-click follows,
   await page.getByRole("button", { name: "Order-flow footprint on chart c1" }).click();
 });
 
+
+test("multi-day footprint: sessions selector capped by interval, loads sessions and today, back to today only", async ({ page }) => {
+  await openTerminal(page);
+  await page.getByRole("button", { name: "1 chart" }).click();
+  const chart = page.getByRole("region", { name: "Chart c1" });
+  await chart.click();
+  await page.getByRole("button", { name: "Order-flow footprint on chart c1" }).click();
+  await chart.getByRole("button", { name: "1m" }).click();
+  const select = chart.getByLabel("Footprint sessions");
+  // 1-minute bars: at most 5 earlier sessions
+  await expect(select.locator("option")).toHaveText(["Today", "5 days + today"]);
+
+  const listed = page.waitForRequest(/\/api\/v1\/market\/footprint\/sessions\?interval=60$/);
+  const today = page.waitForResponse(/\/api\/v1\/market\/footprint\/history\?date=.*&interval=60&ppr=\d$/);
+  await select.selectOption("5");
+  await listed;
+  expect((await today).headers()["cache-control"]).toBe("no-store");        // today is never cached
+  await expect(page.getByLabel(/Session figures/)).toContainText("Session CVD");
+  await expect(page.getByTestId("chart-c1").locator("canvas").first()).toBeVisible();
+  // the synthetic feed has no stored sessions: the left edge reports the start of history
+  await expect(page.getByTestId("footprint-status-c1")).toContainText(/Start of recorded history|earlier sessions/,
+    { timeout: 15_000 });
+
+  // 3-minute bars allow 10 days; replay shows one session
+  await chart.getByRole("button", { name: "3m" }).click();
+  await expect(select.locator("option")).toHaveText(["Today", "5 days + today", "10 days + today"]);
+  await select.selectOption("0");
+  await expect(page.getByLabel(/Session figures/)).toContainText("CVD since start");
+  await chart.getByRole("button", { name: "1m" }).click();
+});

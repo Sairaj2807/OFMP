@@ -75,6 +75,8 @@ describe("config migration", () => {
     const v6 = migrateConfig({ charts: [{ id: "c1", profileZoomY: 12, profileZoomX: 1.5 },
                                         { id: "c2", profileZoomY: 900, profileZoomX: "x" }] });
     expect(v6.charts.map((c) => [c.profileZoomY, c.profileZoomX])).toEqual([[12, 1.5], [0, 0], [0, 0], [0, 0]]);
+    const v7 = migrateConfig({ charts: [{ id: "c1", footprintDays: 10 }, { id: "c2", footprintDays: 3 }] });
+    expect(v7.charts.map((c) => c.footprintDays)).toEqual([10, 0, 0, 0]);
     expect(migrateConfig("garbage")).toEqual(initialTerminal);
   });
 });

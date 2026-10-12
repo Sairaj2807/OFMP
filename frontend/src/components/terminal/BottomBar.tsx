@@ -6,6 +6,7 @@ import { useLiveStats, useReplayMeta } from "@/hooks/useLiveStream";
 import { intervalLabel, price, signed } from "@/lib/format";
 import { snapshotBus } from "@/lib/snapshots";
 import { useSession } from "@/stores/session";
+import { effectiveDays } from "@/lib/chart/footprintSessions";
 import { useTerminal } from "@/stores/terminal";
 
 function Stat({ label, value, tone }: { label: string; value: string; tone?: "buy" | "sell" }) {
@@ -36,13 +37,16 @@ export function BottomBar() {
   }, [active]);
 
   const d = units === "lots" ? lotSize : 1;
+  // multi-day footprints restart CVD at every session
+  const sessionCvd = !!active && active.mode === "live" && active.view !== "profile"
+    && effectiveDays(active.footprintDays, active.interval) > 0;
   const tone = (v: number | undefined) => (v === undefined ? undefined : v >= 0 ? "buy" : "sell");
   return (
     <footer className="flex h-12 shrink-0 items-center divide-x divide-line border-t border-line bg-panel" aria-label="Session figures">
       <Stat label={`Chart ${active?.id ?? ""} · ${active ? intervalLabel(active.interval) : ""}`} value={price(ltp)} />
       <Stat label={`Bar volume · ${units}`} value={stats ? signed(stats.volume / d).replace("+", "") : "—"} />
       <Stat label={`Bar delta · ${units}`} value={stats ? signed(stats.delta / d) : "—"} tone={tone(stats?.delta)} />
-      <Stat label={replay ? `CVD · replay ${replay.date} · ${units}` : `CVD since start · ${units}`}
+      <Stat label={replay ? `CVD · replay ${replay.date} · ${units}` : sessionCvd ? `Session CVD · ${units}` : `CVD since start · ${units}`}
             value={stats ? signed(stats.cvd / d) : "—"} tone={tone(stats?.cvd)} />
       <div className="ml-auto px-3 text-[11px] text-muted" title="BUY/SELL are inferred per trade by the validated midpoint rule (vtrender_reconstruction v1).">
         Sides: {sideBasis ?? "—"}

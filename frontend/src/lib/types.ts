@@ -267,3 +267,26 @@ export interface AlertKinds {
   max_rules: number;
   max_channels: number;
 }
+
+/** One session as footprint bars (GET /api/v1/market/footprint/history). */
+export interface FootprintDay {
+  date: string;
+  symbol?: string;
+  version?: string;
+  state: "historical" | "live";
+  interval_sec: number;
+  row_size: number;
+  cvd_start: number;           // CVD before the first bar: 0 = the session start
+  bars: EngineBar[];
+}
+
+/** GET /api/v1/market/footprint/sessions. */
+export interface FootprintSessions {
+  symbol: string | null;
+  live_date?: string;
+  interval_sec: number;
+  max_days: number;
+  sessions: string[];          // finished sessions, oldest first
+  excluded: { date: string; reason: string }[];
+  unavailable?: string;
+}

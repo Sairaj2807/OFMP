@@ -33,6 +33,12 @@ class MarketGateway(Protocol):
                               date_to: Optional[str] = None) -> dict:
         """Finished sessions of the active contract, each an independent profile, oldest first."""
 
+    async def footprint_sessions(self, interval_sec: int) -> dict:
+        """Finished sessions of the active contract available as footprint history (capped by interval)."""
+
+    async def footprint_day(self, day: str, ppr: int, interval_sec: int) -> Optional[dict]:
+        """One session as footprint bars: finished (cached) or today (live engine). None if unavailable."""
+
     async def session_profile(self, date: str, row: float) -> Optional[dict]:
         """A stored session's whole market profile (None if nothing is stored for that date)."""
 
