@@ -266,6 +266,30 @@ def test_admin_endpoints_require_permission(env):
     assert status["session"]["exchange"] == "NSE" and isinstance(status["session"]["open"], bool)
 
 
+
+def test_broker_session_status_and_relogin(env):
+    client, _, svc = env
+    register_and_login(client, "user@example.com")
+    gw = client.app.state.market
+    assert client.get("/api/v1/market/status").json()["broker"] is None        # synthetic feed: no session
+    client.portal.call(svc.create_user, "admin@example.com", PASSWORD, "admin", None)
+    admin = browser(client)
+    admin.post("/api/v1/auth/login", json={"email": "admin@example.com", "password": PASSWORD})
+    assert admin.post("/api/v1/admin/broker/relogin", headers=csrf(admin)).json()["error"]["code"] ==         "BROKER_SESSION_UNAVAILABLE"
+
+    gw.broker = {"state": "failed", "feed_on": False, "logged_in_at": None, "next_action": "manual re-login",
+                 "next_action_at": None, "last_error": "RuntimeError: Invalid totp (AB1050)", "attempts": 21}
+    public = client.get("/api/v1/market/status").json()["broker"]
+    assert public == {"state": "failed", "feed_on": False, "logged_in_at": None, "next_action": "manual re-login",
+                      "next_action_at": None}                                    # no error text for traders
+    assert admin.get("/api/v1/market/status").json()["broker"]["last_error"].endswith("(AB1050)")
+    assert admin.get("/api/v1/admin/system").json()["broker_session"]["attempts"] == 21
+
+    assert client.post("/api/v1/admin/broker/relogin", headers=csrf(client)).status_code == 403
+    assert admin.post("/api/v1/admin/broker/relogin").status_code == 403         # cookie auth needs CSRF
+    assert admin.post("/api/v1/admin/broker/relogin", headers=csrf(admin)).json() == {"accepted": True}
+    assert gw.relogins == 1 and audit_actions()[-1] == "broker.relogin"
+
 def test_session_profile_endpoint(env):
     client, _, _ = env
     assert client.get("/api/v1/market/profile?date=2026-09-29").status_code == 401

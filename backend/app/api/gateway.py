@@ -8,6 +8,12 @@ class MarketGateway(Protocol):
     def active_contract(self) -> Optional[dict]:
         """The live contract (token, tradingsymbol, tick_size, lotsize, ...)."""
 
+    def broker_status(self) -> Optional[dict]:
+        """The daily broker session (None when not scheduled: synthetic feed, worker mode)."""
+
+    def broker_relogin(self) -> bool:
+        """Log in again now (admins); False when there is no broker session."""
+
     def feed_status(self) -> Optional[dict]:
         """Provider/feed health, including "connected"."""
 

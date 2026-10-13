@@ -195,7 +195,8 @@ export function FootprintChart({ config, units, lotSize, tickSize, onStats }: Pr
         Waiting for the first trade…
       </div>
       <div ref={statusRef} hidden data-testid={`footprint-status-${id}`} role="status"
-           className="absolute bottom-8 left-2 z-10 rounded border border-line bg-raised/90 px-2 py-0.5 text-[11px] text-muted" />
+           className="absolute left-2 top-7 z-10 rounded border border-line bg-raised/90 px-2 py-0.5 text-[11px] text-muted" />
+      {/* top-left, under the session date label: the bottom holds the footprint table */}
       <div
         ref={tooltipRef}
         hidden

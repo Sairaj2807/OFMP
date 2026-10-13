@@ -3,7 +3,7 @@
 // ofmp_csrf cookie in X-CSRF-Token (double-submit). An expired access token
 // is refreshed once, transparently, then the request is retried.
 import type {
-  AlertChannel, AlertEvent, AlertKinds, AlertRule, AlertRuleInput, Contract, FootprintDay, FootprintSessions,
+  AlertChannel, AlertEvent, AlertKinds, AlertRule, AlertRuleInput, BrokerStatus, Contract, FootprintDay, FootprintSessions,
   MarketSession, ReplaySessionInfo, User, Workspace,
   WorkspaceSummary,
 } from "./types";
@@ -123,6 +123,8 @@ export class ApiClient {
   testAlertChannel = (id: string) =>
     this.request<{ ok: boolean; error: string | null }>("POST", `/api/v1/alerts/channels/${encodeURIComponent(id)}/test`);
 
+  brokerRelogin = () => this.request<{ accepted: boolean }>("POST", "/api/v1/admin/broker/relogin");
+
   switchContract = (token: string) =>
     this.request<{ contract: Contract }>("POST", "/api/v1/admin/contract", { token });
 
@@ -134,7 +136,7 @@ export class ApiClient {
 
   marketStatus = () =>
     this.request<{ contract: Contract | null; feed: { connected: boolean; error?: string | null } | null;
-                   session: MarketSession }>(
+                   session: MarketSession; broker?: BrokerStatus | null }>(
       "GET", "/api/v1/market/status");
 }
 

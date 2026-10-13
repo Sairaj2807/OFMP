@@ -101,7 +101,7 @@ Checked server-side on every route (`require_permission`).
 | GET | `/live` | — | process alive |
 | GET | `/ready` | — | 503 only if a configured database is unreachable. A disconnected feed (e.g. market closed) does not make the API unready. |
 | GET | `/health` | — | summary |
-| GET | `/api/v1/market/status` | `market.read` | active contract, feed health, and `session` (NSE calendar: `open`, today's `session`, `holiday`, `next_open`, `calendar_covers_today`) |
+| GET | `/api/v1/market/status` | `market.read` | active contract, feed health, `session` (NSE calendar: `open`, today's `session`, `holiday`, `next_open`, `calendar_covers_today`) and `broker`: the daily broker session (`state`, `feed_on`, `logged_in_at`, `next_action`, `next_action_at`; admins also `last_error`, `attempts`, `contract`, `token_expires_at`, `gave_up_for`, `login_paused_until`; `null` without a scheduled session). See `docs/broker-session.md` |
 | GET | `/api/v1/market/contracts` | `market.read` | switchable contracts |
 | GET | `/api/v1/market/profile/history?row=&limit=&from=&to=` | `market.read` | finished sessions of the **active contract**, each an independent profile, oldest first: `{symbol, row_size, tick_size, version, before, live_date, sessions: [{date, symbol, state: "historical"\|"error", profile?, error?}], excluded: [{date, reason}]}`. `limit` 1–50 (default 5), `from`/`to` at most a year apart. Untagged (pre-tagging) sessions are listed in `excluded`, never included |
 | GET | `/api/v1/market/footprint/sessions?interval=` | `market.read` | finished sessions of the **active contract** that a multi-day footprint may show before today: `{symbol, live_date, interval_sec, max_days, sessions: [date], excluded: [{date, reason}]}`, oldest first. `max_days` is the cap for the interval: 1 m → 5, 3 m → 10, 5 m and above → 20. Untagged (pre-tagging) days are in `excluded`, never in `sessions`. `422 INVALID_INTERVAL` for an interval the server does not offer |
@@ -109,6 +109,7 @@ Checked server-side on every route (`require_permission`).
 | GET | `/api/v1/market/profile?date=&row=` | `market.read` | a stored session's market profile (`row` in points: 1, 2, 5, 10, 20, 50; default 5); `404` if nothing is stored. See `docs/market-profile.md` |
 | GET | `/api/v1/admin/users` | `admin.users` | cursor-paginated by email |
 | GET | `/api/v1/admin/system` | `admin.system` | feed, database writer, WebSocket stats |
+| POST | `/api/v1/admin/broker/relogin` | `admin.system` | log in to Angel One now: inside market hours also restarts the day (after giving up too), outside them only checks the login. Audited as `broker.relogin`; `409 BROKER_SESSION_UNAVAILABLE` on the synthetic feed / worker mode |
 | POST | `/api/v1/admin/contract` | `admin.system` | `{token}` from `/market/contracts`: switch the live feed (resets the live footprint; audited as `contract.switch`); `422 UNKNOWN_CONTRACT` otherwise |
 
 ## Workspaces

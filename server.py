@@ -10,6 +10,7 @@ The legacy pages (/, /chart, /replay and their /ws/frontend, /ws/chart and
 import asyncio
 import contextlib
 import logging
+import uuid
 import os
 import time
 from datetime import date as date_cls
@@ -41,6 +42,7 @@ from backend.app.infrastructure.postgres.repositories import (last_open_interest
                                                               untagged_session_dates, upsert_instrument)
 from backend.app.services.footprint_history import FootprintHistory, day_cap
 from backend.app.services.profile_history import ProfileHistory
+from backend.app.services.broker_session import BrokerSession, SessionTimes
 from backend.app.services.replay import ReplayLibrary, ReplaySession
 from backend.app.infrastructure.postgres.rows import IST, ist_date
 from backend.app.infrastructure.postgres.writer import MarketDataWriter
@@ -231,12 +233,13 @@ def _evaluate_alerts(engine: TickProcessorState, tick_in: dict) -> None:
         log.exception("alert evaluation failed")
 
 
-async def _activate_contract(contract: dict) -> None:
+async def _activate_contract(contract: dict, start_feed: bool = True) -> None:
     """Swaps in `contract` as the live one: stops whatever ws_client is
     currently running (a no-op the first time, at startup), builds a fresh
-    engine, updates STATE, and starts ingesting. Serialized by
-    CONTRACT_SWITCH_LOCK so two switch requests (or a switch racing startup)
-    can't interleave their teardown/startup."""
+    engine, updates STATE, and starts ingesting (unless `start_feed` is False:
+    outside the broker session the engine is restored for the charts but the
+    feed stays off). Serialized by CONTRACT_SWITCH_LOCK so two switch requests
+    (or a switch racing startup) can't interleave their teardown/startup."""
     async with CONTRACT_SWITCH_LOCK:
         old_client = STATE.get("ws_client")
         old_task = getattr(app.state, "ws_task", None)
@@ -255,11 +258,121 @@ async def _activate_contract(contract: dict) -> None:
             app.state.alert_runtime.reset_market(contract.get("tradingsymbol"))
         STATE["connected"] = False
         STATE["last_error"] = None
-        STATE["ws_client"] = client
-        app.state.ws_task = asyncio.create_task(client.run())
+        STATE["ws_client"] = client if start_feed else None
+        app.state.ws_task = asyncio.create_task(client.run()) if start_feed else None
         print(f"[server] Active contract: {contract['tradingsymbol']} "
               f"(token {contract.get('token')}, tick size {contract['tick_size']})"
-              + (f", restored {restored} trades from today's session" if restored else ""))
+              + (f", restored {restored} trades from today's session" if restored else "")
+              + ("" if start_feed else " (feed off until the broker session starts)"))
+
+
+async def _stop_feed() -> None:
+    """Disconnects the live feed and keeps the engine (charts keep today's data)."""
+    async with CONTRACT_SWITCH_LOCK:
+        client, task = STATE.get("ws_client"), getattr(app.state, "ws_task", None)
+        if client is not None:
+            client.stop()
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        STATE["ws_client"] = None
+        app.state.ws_task = None
+        STATE["connected"] = False
+    writer = STATE.get("db_writer")
+    if writer is not None:
+        await writer.flush()
+
+
+# ---------------------------------------------------------------------------
+# Daily broker session (backend/app/services/broker_session.py)
+# ---------------------------------------------------------------------------
+
+def _broker_scheduled() -> bool:
+    return config.BROKER_SCHEDULE and not config.SYNTHETIC_FEED and config.INGEST_MODE != "redis"
+
+
+async def _broker_login() -> dict:
+    """A full Angel login (never a reused token), proved with a REST call."""
+    try:
+        if STATE.pop("broker_manual", False):
+            angel_client.reset_login_guard()
+        tokens = await asyncio.to_thread(angel_client.ensure_valid_token, 120, True)
+        await asyncio.to_thread(angel_client.verify_session, tokens["jwt_token"])
+    except Exception:
+        metrics.BROKER_LOGINS.labels("failed").inc()
+        raise
+    metrics.BROKER_LOGINS.labels("ok").inc()
+    exp = angel_client.token_expiry(tokens)
+    if exp:
+        metrics.BROKER_TOKEN_EXPIRES.set(exp)
+    return {"expires_at": exp or None}
+
+
+async def _broker_start_day() -> dict:
+    """The trading day: fresh instrument master, the contract (an admin's pinned choice while it is
+    unexpired, else the front month: auto-roll), a new engine restored from today's trades, feed on."""
+    previous = STATE.get("contract") or {}
+    instruments = await asyncio.to_thread(angel_client.fetch_instrument_master, True)
+    today = date_cls.fromisoformat(_live_session_date())
+    pinned = STATE.get("contract_pinned") and previous
+    expiry = angel_client.parse_expiry_date(previous.get("expiry", "")) if pinned else None
+    if pinned and expiry is not None and expiry >= today:
+        contract = previous
+    else:
+        STATE["contract_pinned"] = False
+        contract = await asyncio.to_thread(angel_client.resolve_configured_future, instruments)
+    await _activate_contract(contract)
+    symbol = contract["tradingsymbol"]
+    return {"contract": symbol, "rolled": bool(previous) and previous.get("tradingsymbol") != symbol}
+
+
+def _last_tick_ms() -> Optional[int]:
+    engine = STATE.get("engine")
+    quote = getattr(engine, "last_quote", None) if engine is not None else None
+    return getattr(quote, "received_ts_ms", None)
+
+
+async def _system_notify(level: str, message: str) -> None:
+    """Broker notices: the log, the terminal of every signed-in admin, and every admin's webhooks."""
+    db = STATE.get("db_engine")
+    event = {"id": f"system-{uuid.uuid4()}", "type": "system.broker", "rule_id": None,
+             "rule_name": "Broker session", "kind": "system.broker", "level": level, "message": message,
+             "value": None, "symbol": (STATE.get("contract") or {}).get("tradingsymbol"),
+             "fired_at": datetime.now().astimezone().isoformat(), "details": {}}
+    if db is None:
+        return
+    import sqlalchemy as sa
+    from backend.app.infrastructure.postgres.schema import notification_channels, users
+    async with db.connect() as conn:
+        admins = [str(r[0]) for r in (await conn.execute(
+            sa.select(users.c.id).where(users.c.role.in_(("admin", "super_admin")), users.c.is_active))).all()]
+        channels = (await conn.execute(
+            sa.select(notification_channels.c.id, notification_channels.c.owner_user_id, notification_channels.c.config)
+            .where(notification_channels.c.owner_user_id.in_(admins) if admins else sa.false(),
+                   notification_channels.c.enabled, notification_channels.c.deleted_at.is_(None)))).all()
+    hub = getattr(app.state, "stream_hub", None)
+    for user_id in admins:
+        if hub is not None:
+            await hub.notify_user(user_id, "alert", event)
+    webhook = getattr(app.state, "webhook_provider", None)
+    if webhook is not None:
+        for channel_id, owner, cfg in channels:
+            ok, err = await webhook.deliver(str(owner), event, (str(channel_id), "webhook", cfg))
+            if not ok:
+                log.warning("broker notice to webhook %s failed: %s", channel_id, err)
+
+
+def _broker() -> Optional["BrokerSession"]:
+    return getattr(app.state, "broker_session", None)
+
+
+def _broker_status() -> Optional[dict]:
+    b = _broker()
+    if b is None:
+        return None
+    guard = angel_client.login_state()
+    return {**b.status(), "login_paused_until": guard["paused_until"] or None}
 
 
 @app.on_event("startup")
@@ -291,7 +404,24 @@ async def startup():
     if app.state.auth_service is None:
         print("[server] /api/v1 auth disabled: needs DATABASE_URL and JWT_SECRET")
 
-    await _activate_contract(await _resolve_default_contract())
+    if not _broker_scheduled():
+        await _activate_contract(await _resolve_default_contract())
+        return
+    # Broker session: restore the engine for the charts now (the contract comes from the public
+    # instrument master: no login needed), and let the schedule log in and start the feed.
+    try:
+        contract = await asyncio.to_thread(angel_client.resolve_configured_future)
+        await _activate_contract(contract, start_feed=False)
+    except Exception as e:
+        log.warning("contract not resolved at startup (the broker session retries): %r", e)
+    calendar = app.state.market_calendar
+    app.state.broker_session = BrokerSession(
+        calendar, login=_broker_login, start_day=_broker_start_day, stop_feed=_stop_feed, notify=_system_notify,
+        last_tick_ms=_last_tick_ms,
+        times=SessionTimes(login_lead_min=config.BROKER_LOGIN_LEAD_MIN, give_up_lead_min=config.BROKER_GIVE_UP_LEAD_MIN,
+                           stop_after_close_min=config.BROKER_STOP_AFTER_CLOSE_MIN, retry_sec=config.BROKER_RETRY_SEC))
+    app.state.broker_task = asyncio.create_task(app.state.broker_session.run())
+    print("[server] Broker session scheduled: Angel login before each NSE session, feed off after the close")
 
 
 @app.on_event("shutdown")
@@ -299,7 +429,9 @@ async def shutdown():
     ws_client = STATE.get("ws_client")
     if ws_client:
         ws_client.stop()
-    for t in (getattr(app.state, "ws_task", None),
+    if _broker() is not None:
+        _broker().stop()
+    for t in (getattr(app.state, "broker_task", None), getattr(app.state, "ws_task", None),
               getattr(app.state, "stream_task", None), getattr(app.state, "alert_task", None)):
         if t:
             t.cancel()
@@ -499,6 +631,17 @@ class ServerMarketGateway:
             return None
         return {**health, "connected": STATE["connected"], "error": STATE["last_error"]}
 
+    def broker_status(self) -> Optional[dict]:
+        return _broker_status()
+
+    def broker_relogin(self) -> bool:
+        b = _broker()
+        if b is None:
+            return False
+        STATE["broker_manual"] = True        # a manual re-login lifts the failed-login pause
+        b.relogin()
+        return True
+
     def database_stats(self) -> Optional[dict]:
         writer = STATE.get("db_writer")
         return writer.stats() if writer else None
@@ -695,7 +838,10 @@ async def _switch_contract(token: str) -> dict:
     contract = next((c for c in await _list_candidate_contracts() if str(c.get("token")) == str(token)), None)
     if contract is None:
         raise ValueError(f"token {token} is not among the switchable contracts")
-    await _activate_contract(contract)
+    # outside the broker session the engine switches but the feed stays off until the session starts
+    broker = _broker()
+    await _activate_contract(contract, start_feed=broker is None or broker.feed_on)
+    STATE["contract_pinned"] = True      # the morning start keeps an admin's choice while it is unexpired
     return STATE["contract"]
 
 

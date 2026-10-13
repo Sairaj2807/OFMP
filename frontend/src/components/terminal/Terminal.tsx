@@ -57,10 +57,13 @@ export function Terminal() {
   useWorkspaces(user !== null);
   useAlerts(user !== null);
 
-  // exchange session (holidays applied): refreshed every minute for the top bar
+  // exchange session (holidays applied) and the broker session: refreshed every minute for the top bar
   useEffect(() => {
     if (!user) return;
-    const load = () => api.marketStatus().then((s) => useSession.getState().setMarket(s.session ?? null)).catch(() => undefined);
+    const load = () => api.marketStatus().then((s) => {
+      useSession.getState().setMarket(s.session ?? null);
+      useSession.getState().setBroker(s.broker ?? null);
+    }).catch(() => undefined);
     void load();
     const timer = setInterval(load, 60_000);
     return () => clearInterval(timer);

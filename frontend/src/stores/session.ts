@@ -2,7 +2,7 @@
 import { create } from "zustand";
 
 import type { StreamStatus } from "@/lib/stream";
-import type { Contract, MarketSession, User } from "@/lib/types";
+import type { BrokerStatus, Contract, MarketSession, User } from "@/lib/types";
 import { DEFAULT_INTERVALS } from "./terminal";
 
 export interface FeedState {
@@ -21,6 +21,7 @@ interface SessionState {
   intervals: number[];
   notice: string | null; // one transient message for the top bar
   market: MarketSession | null;
+  broker: BrokerStatus | null;
   setUser: (user: User | null) => void;
   setStream: (status: StreamStatus) => void;
   setFeed: (feed: Partial<FeedState>) => void;
@@ -28,6 +29,7 @@ interface SessionState {
   setIntervals: (intervals: number[]) => void;
   setNotice: (notice: string | null) => void;
   setMarket: (market: MarketSession | null) => void;
+  setBroker: (broker: BrokerStatus | null) => void;
 }
 
 export const useSession = create<SessionState>()((set) => ({
@@ -38,6 +40,7 @@ export const useSession = create<SessionState>()((set) => ({
   intervals: DEFAULT_INTERVALS,
   notice: null,
   market: null,
+  broker: null,
   setUser: (user) => set({ user }),
   setStream: (stream) => set({ stream }),
   setFeed: (feed) =>
@@ -50,4 +53,5 @@ export const useSession = create<SessionState>()((set) => ({
   setIntervals: (intervals) => set({ intervals: intervals.length ? intervals : DEFAULT_INTERVALS }),
   setNotice: (notice) => set({ notice }),
   setMarket: (market) => set({ market }),
+  setBroker: (broker) => set({ broker }),
 }));

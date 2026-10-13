@@ -54,6 +54,49 @@ def save_tokens(jwt_token: str, refresh_token: str, feed_token: str) -> None:
         f.write(f"jwt_token={jwt_token}\n")
         f.write(f"refresh_token={refresh_token}\n")
         f.write(f"feed_token={feed_token}\n")
+    try:
+        os.chmod(config.TOKENS_FILE, 0o600)     # owner only (best effort: Windows keeps its own ACLs)
+    except OSError:
+        pass
+
+
+class LoginBlocked(RuntimeError):
+    """Automatic logins are paused after repeated failures, so a wrong PIN or TOTP secret cannot lock
+    the Angel account. A manual re-login (reset_login_guard) lifts the pause."""
+
+
+# Full-login bookkeeping (process-wide; every login goes through ensure_valid_token).
+LOGIN_FAILURES_BEFORE_PAUSE = 3
+LOGIN_PAUSE_SEC = 15 * 60
+_login_state = {"invalid": False, "failures": 0, "paused_until": 0.0, "last_login_at": None,
+                "last_error": None}
+
+
+def login_state() -> dict:
+    """For status pages: no token values, ever."""
+    return {k: _login_state[k] for k in ("failures", "paused_until", "last_login_at", "last_error")}
+
+
+def mark_token_invalid() -> None:
+    """Angel rejected the saved token (e.g. HTTP 401 on the feed): never reuse or refresh it; the next
+    ensure_valid_token does a full login."""
+    _login_state["invalid"] = True
+
+
+def reset_login_guard() -> None:
+    _login_state["failures"] = 0
+    _login_state["paused_until"] = 0.0
+
+
+def token_expiry(tokens: Optional[dict] = None) -> int:
+    """The saved JWT's expiry (epoch seconds; 0 if unknown)."""
+    jwt_token = (tokens if tokens is not None else load_tokens()).get("jwt_token", "")
+    return _decode_jwt_exp(jwt_token) if jwt_token else 0
+
+
+def verify_session(jwt_token: str) -> dict:
+    """Raises unless Angel accepts the token (a REST call, not just the expiry inside the token)."""
+    return autologin.get_profile(jwt_token)
 
 
 def _decode_jwt_exp(jwt_token: str) -> int:
@@ -67,18 +110,21 @@ def _decode_jwt_exp(jwt_token: str) -> int:
         return 0
 
 
-def ensure_valid_token(margin_sec: int = 120) -> dict:
+def ensure_valid_token(margin_sec: int = 120, force_login: bool = False) -> dict:
     """Return a dict with jwt_token/refresh_token/feed_token that is valid for
-    at least `margin_sec` more seconds, refreshing or re-logging-in as needed."""
+    at least `margin_sec` more seconds, refreshing or re-logging-in as needed.
+    `force_login` (the daily scheduled login) always does a full login. A token
+    marked invalid is neither reused nor refreshed."""
     tokens = load_tokens()
     jwt_token = tokens.get("jwt_token", "")
     exp = _decode_jwt_exp(jwt_token) if jwt_token else 0
+    usable = jwt_token and not force_login and not _login_state["invalid"]
 
-    if jwt_token and exp - time.time() > margin_sec:
+    if usable and exp - time.time() > margin_sec:
         return tokens
 
     # try a lightweight refresh first
-    if jwt_token and tokens.get("refresh_token"):
+    if usable and tokens.get("refresh_token"):
         try:
             data = autologin.generate_token(jwt_token, tokens["refresh_token"])
             new_jwt = data.get("jwtToken", jwt_token)
@@ -90,8 +136,20 @@ def ensure_valid_token(margin_sec: int = 120) -> dict:
         except Exception as e:
             print(f"[angel_client] Refresh failed ({e}), falling back to full login")
 
-    # full re-login
-    login_data = autologin.login()
+    # full re-login (paused after repeated failures: protects the account from a lock-out)
+    if time.time() < _login_state["paused_until"]:
+        raise LoginBlocked(f"automatic Angel logins paused until "
+                           f"{time.strftime('%H:%M', time.localtime(_login_state['paused_until']))} after "
+                           f"{_login_state['failures']} failed attempts: {_login_state['last_error']}")
+    try:
+        login_data = autologin.login()
+    except Exception as e:
+        _login_state["failures"] += 1
+        _login_state["last_error"] = str(e)
+        if _login_state["failures"] >= LOGIN_FAILURES_BEFORE_PAUSE:
+            _login_state["paused_until"] = time.time() + LOGIN_PAUSE_SEC
+        raise
+    _login_state.update(invalid=False, failures=0, paused_until=0.0, last_login_at=time.time(), last_error=None)
     new_jwt = login_data["jwtToken"]
     new_refresh = login_data["refreshToken"]
     new_feed = login_data["feedToken"]

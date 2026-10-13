@@ -19,6 +19,22 @@ export interface MarketSession {
   calendar_covers_today: boolean;
 }
 
+/** The daily broker session (GET /api/v1/market/status "broker"; null when not scheduled).
+ *  last_error .. login_paused_until are sent to admins only. */
+export interface BrokerStatus {
+  state: "starting" | "waiting" | "logging_in" | "ready" | "failed" | "stopped";
+  feed_on: boolean;
+  logged_in_at: string | null;
+  next_action: string | null;          // "login" | "feed off" | "retry" | "manual re-login"
+  next_action_at: string | null;
+  last_error?: string | null;
+  attempts?: number;
+  contract?: string | null;
+  token_expires_at?: string | null;
+  gave_up_for?: string | null;
+  login_paused_until?: number | null;  // epoch seconds
+}
+
 export interface Contract {
   token: string | null;
   tradingsymbol: string;

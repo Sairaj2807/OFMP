@@ -1287,3 +1287,62 @@ bar.
   against 08 Oct.
 - Days without stored raw ticks (30 Sep) have no OI.
 - Futures OI only.
+
+## 29. Daily broker session (Angel One login every trading morning)
+
+Done on 2026-10-13. Hosting is deferred (owner decision); alerts go to the existing webhooks plus the log;
+times are the plan's defaults (08:30 login, retries to 09:10, feed off 15:45).
+
+**Why:**
+- Angel tokens expire at midnight (seen today: the saved token was valid until 2026-10-14 00:00).
+- The process logged in only when the feed reconnected.
+- A cancelled token that still looked unexpired could be reused forever.
+- The contract and the trading day changed only on restart.
+- A failed login was noticed only from an empty chart.
+
+**What:**
+- `services/broker_session.py`: the NSE-calendar schedule (see `docs/broker-session.md`), on an injectable
+  clock.
+- Server hooks:
+  - forced login checked by `getProfile`;
+  - start of day (fresh instrument master, pinned-or-front-month contract, `_activate_contract`);
+  - `_stop_feed`;
+  - admin notices (in-app plus webhooks).
+- Startup outside market hours restores the engine without a login and leaves the feed off.
+- `angel_client`:
+  - `ensure_valid_token(force_login)`;
+  - `mark_token_invalid` (the feed's 401/403 handshake path);
+  - a lock-out guard (3 failures → 15-minute pause, `LoginBlocked`);
+  - request timeouts;
+  - owner-only token file;
+  - error messages carry Angel's message and code, not the whole response.
+- Admin **Make live** survives the next morning while the contract is unexpired.
+- API: `broker` in market status (error details for admins only), `broker_session` in admin system,
+  `POST /api/v1/admin/broker/relogin` (audited).
+- CLI: `broker-login [--check]`. Metrics for logins and token expiry.
+- Frontend: top-bar chip plus admin **Re-login**.
+- Fixed: the multi-day status box covered the footprint table's labels; it is now at the top left.
+
+**Verified:**
+- 393 backend tests. New: 12 broker-session tests on a fake clock:
+  - Fri→Wed with a weekend and a holiday;
+  - two failures then success;
+  - giving up at 09:10 (21 attempts) and retrying the next morning;
+  - a 10:00 start with its 40-minute window;
+  - manual re-login after giving up and in the evening;
+  - roll notice and watchdog;
+  - feed off when found running after the close;
+  - forced login and dead-token rules;
+  - the lock-out guard;
+  - 401/403 vs 503 on the handshake;
+  - pinned vs expired vs front-month contract.
+  Plus API tests (trader vs admin view, 403s, CSRF, audit).
+- The schedule found and fixed a lost-wake-up bug: a re-login arriving just before a wait was dropped.
+- Server startup smoke test (Angel mocked):
+  - after the close: engine restored, feed off, next login tomorrow 08:30;
+  - inside the window: forced login → check → fresh master → feed on.
+- `broker-login --check` against Angel: OK (token valid until 00:00).
+- Frontend: 55 unit tests, 15/15 Playwright tests (new: top-bar states and admin re-login).
+
+**Not done (with hosting):** running the process as a service or container, moving the schedule into the
+ingest worker for `INGEST_MODE=redis`, and an email/Telegram channel (webhooks can bridge to them).

@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import { Button, Kbd, StatusDot, type DotState } from "@/components/ui/controls";
+import { api } from "@/lib/api";
+import { brokerLabel, type BrokerTone } from "@/lib/broker";
 import { istWeekdayTime } from "@/lib/format";
 import type { StreamStatus } from "@/lib/stream";
 import type { MarketSession } from "@/lib/types";
@@ -25,6 +27,49 @@ function marketLabel(m: MarketSession | null): string | null {
   if (!m || m.open) return null;
   const reason = m.holiday ? `Market closed: ${m.holiday}` : "Market closed";
   return m.next_open ? `${reason} · opens ${istWeekdayTime(m.next_open)} IST` : reason;
+}
+
+const BROKER_TONES: Record<BrokerTone, string> = {
+  ok: "text-buy", warn: "text-warn", down: "text-sell", muted: "text-muted",
+};
+
+/** The daily Angel One session; admins can ask for a fresh login. */
+function BrokerChip() {
+  const broker = useSession((s) => s.broker);
+  const isAdmin = useSession((s) => s.user?.permissions?.includes("admin.system") ?? false);
+  const setNotice = useSession((s) => s.setNotice);
+  const setBroker = useSession((s) => s.setBroker);
+  const [busy, setBusy] = useState(false);
+  const label = brokerLabel(broker);
+  if (!label) return null;
+
+  const relogin = async () => {
+    const inHours = broker?.state === "ready" || broker?.state === "logging_in" || broker?.state === "failed";
+    const what = inHours ? "Log in to Angel One again and restart today's feed?"
+      : "Log in to Angel One now to check the credentials? (The feed starts at the next session.)";
+    if (!window.confirm(what)) return;
+    setBusy(true);
+    try {
+      await api.brokerRelogin();
+      setNotice("Broker re-login requested");
+      // the login takes a few seconds: refresh the status shortly after
+      setTimeout(() => {
+        api.marketStatus().then((s) => setBroker(s.broker ?? null)).catch(() => undefined);
+      }, 4000);
+    } catch (e) {
+      setNotice(`Re-login failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <span className="flex items-center gap-1" aria-label="Broker session">
+      <span className={`text-[12px] ${BROKER_TONES[label.tone]}`} title={label.title || undefined}>{label.text}</span>
+      {isAdmin && (
+        <Button onClick={relogin} disabled={busy} title="Log in to Angel One again now (admins)">Re-login</Button>
+      )}
+    </span>
+  );
 }
 
 export function TopBar({ onOpenPalette, onLogout }: { onOpenPalette: () => void; onLogout: () => void }) {
@@ -52,6 +97,7 @@ export function TopBar({ onOpenPalette, onLogout }: { onOpenPalette: () => void;
       <span className="num text-[13px] text-fg" aria-label="Active contract">{feed.symbol ?? "—"}</span>
       <span title={feed.error ?? undefined}><StatusDot state={conn.state} label={conn.label} /></span>
       {closed && <span className="text-[12px] text-muted" aria-label="Market session">{closed}</span>}
+      <BrokerChip />
 
       {notice && (
         <div role="status" className="flex items-center gap-2 rounded border border-warn/40 bg-warn/10 px-2 py-0.5 text-[12px] text-warn">

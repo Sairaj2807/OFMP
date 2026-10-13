@@ -450,3 +450,28 @@ test("footprint table: on by default, rows chosen per chart and saved, values co
   await expect(table).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: /Workspace/ })).toContainText("Saved", { timeout: 5_000 });
 });
+
+test("broker session: top-bar status, admin re-login (synthetic feed: no session to restart)", async ({ page }) => {
+  let broker: object | null = { state: "failed", feed_on: false, logged_in_at: null, next_action: "manual re-login",
+                                next_action_at: null, last_error: "RuntimeError: Invalid totp (AB1050)", attempts: 21 };
+  await page.route(/\/api\/v1\/market\/status$/, async (route) => {
+    const real = await (await route.fetch()).json();
+    await route.fulfill({ json: { ...real, broker } });
+  });
+  await openTerminal(page);
+  const chip = page.getByLabel("Broker session");
+  await expect(chip).toContainText("Broker: login failed");
+  await expect(chip.getByText("Broker: login failed")).toHaveAttribute("title", /Invalid totp/);
+  if (process.env.E2E_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.E2E_SCREENSHOT_DIR}/broker-failed.png` });
+
+  // the demo user is an admin: Re-login reaches the server, which has no broker session on the synthetic feed
+  page.once("dialog", (d) => d.accept());
+  await chip.getByRole("button", { name: "Re-login" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Re-login failed" })).toContainText("no scheduled broker session");
+
+  broker = { state: "ready", feed_on: true, logged_in_at: new Date().toISOString(), next_action: "feed off",
+             next_action_at: new Date(Date.now() + 3600e3).toISOString() };
+  await page.reload();
+  await expect(page.getByLabel("Broker session")).toContainText(/Broker: logged in \d\d:\d\d/);
+  if (process.env.E2E_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.E2E_SCREENSHOT_DIR}/broker-ready.png` });
+});

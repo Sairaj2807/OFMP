@@ -128,6 +128,7 @@ class WebhookProvider:
     async def deliver(self, owner_user_id: str, event: dict, channel: Optional[tuple] = None) -> tuple:
         channel_id, _kind, config = channel
         body = json.dumps({"type": "alert.fired", **event}, default=str, separators=(",", ":")).encode()
+        # (a system notice passes its own "type", e.g. "system.broker", which overrides the default)
         ts = int(time.time())
         headers = {"Content-Type": "application/json", "X-OFMP-Timestamp": str(ts),
                    "X-OFMP-Signature": sign(webhook_secret(self.server_secret, channel_id), ts, body),

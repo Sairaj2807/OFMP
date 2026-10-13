@@ -15,6 +15,7 @@ TOTP_SECRET = os.environ.get("ANGEL_TOTP_SECRET", "")
 API_KEY     = os.environ.get("ANGEL_API_KEY", "")
 
 BASE_URL = "https://apiconnect.angelone.in"
+TIMEOUT_SEC = 15           # every request: a hung connection must not stall the morning login
 
 session = requests.Session()
 
@@ -27,7 +28,7 @@ def get_local_ip():
 
 def get_public_ip():
     try:
-        return requests.get("https://api.ipify.org").text
+        return requests.get("https://api.ipify.org", timeout=5).text
     except Exception:
         return "127.0.0.1"
 
@@ -70,11 +71,11 @@ def login():
         "X-PrivateKey": API_KEY
     }
 
-    res = session.post(url, json=payload, headers=headers)
+    res = session.post(url, json=payload, headers=headers, timeout=TIMEOUT_SEC)
     data = res.json()
 
     if not data.get("status"):
-        raise Exception(f"[LOGIN] Failed: {data}")
+        raise Exception(f"[LOGIN] Failed: {data.get('message')} ({data.get('errorcode') or data.get('errorCode')})")
 
     print("[LOGIN] Success — JWT and tokens received")
 
@@ -101,14 +102,37 @@ def generate_token(jwt_token, refresh_token):
         "X-PrivateKey": API_KEY
     }
 
-    res = session.post(url, json=payload, headers=headers)
+    res = session.post(url, json=payload, headers=headers, timeout=TIMEOUT_SEC)
     data = res.json()
 
     if not data.get("status"):
-        raise Exception(f"[TOKEN_REFRESH] Failed: {data}")
+        raise Exception(f"[TOKEN_REFRESH] Failed: {data.get('message')} ({data.get('errorcode') or data.get('errorCode')})")
 
     print("[TOKEN_REFRESH] Success — new JWT received")
 
+    return data["data"]
+
+
+# ── Step 3: Session check ───────────────────────────────────
+def get_profile(jwt_token):
+    """The logged-in user's profile: proves a token is accepted (a token can be
+    cancelled by Angel before the expiry written inside it)."""
+    url = f"{BASE_URL}/rest/secure/angelbroking/user/v1/getProfile"
+    headers = {
+        "Authorization": f"Bearer {jwt_token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-UserType": "USER",
+        "X-SourceID": "WEB",
+        "X-ClientLocalIP": get_local_ip(),
+        "X-ClientPublicIP": get_public_ip(),
+        "X-MACAddress": "00:00:00:00:00:00",
+        "X-PrivateKey": API_KEY
+    }
+    res = session.get(url, headers=headers, timeout=TIMEOUT_SEC)
+    data = res.json()
+    if not data.get("status"):
+        raise Exception(f"[PROFILE] Failed: {data.get('message')} ({data.get('errorcode') or data.get('errorCode')})")
     return data["data"]
 
 

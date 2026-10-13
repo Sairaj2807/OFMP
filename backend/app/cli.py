@@ -5,6 +5,8 @@
     python -m backend.app.cli import-ticks [--date D]      data/ticks archive -> raw_ticks (idempotent)
     python -m backend.app.cli reconcile [--date D]         compare JSONL trade counts with the database
     python -m backend.app.cli db-status                    row counts per table / session
+    python -m backend.app.cli broker-login [--check]       Angel One login as the 08:30 schedule does it
+                                                         (--check: verify the saved token only)
     python -m backend.app.cli create-user --email E --role admin   create a verified user (password prompted,
                                                            or read from the env var named by --password-env)
 
@@ -158,6 +160,33 @@ async def _create_user(args) -> int:
     return 0
 
 
+def cmd_broker_login(args) -> int:
+    """One Angel One login, as the 08:30 schedule does it, checked with a REST call. Prints the
+    session status, never a token. --check only checks the saved token (no new login)."""
+    from datetime import datetime
+
+    import angel_client
+    try:
+        if args.check:
+            tokens = angel_client.load_tokens()
+            if not tokens.get("jwt_token"):
+                print("no saved Angel token")
+                return 1
+        else:
+            tokens = angel_client.ensure_valid_token(force_login=True)
+        profile = angel_client.verify_session(tokens["jwt_token"])
+    except Exception as e:
+        print(f"Angel session NOT OK: {e}")
+        return 1
+    exp = angel_client.token_expiry(tokens)
+    name = (profile or {}).get("name") or "?"
+    code = (profile or {}).get("clientcode") or angel_client.autologin.CLIENT_CODE
+    masked = code[:2] + "*" * max(0, len(code) - 4) + code[-2:] if len(code) > 4 else "****"
+    print(f"Angel session OK: client {masked} ({name}); token valid until "
+          f"{datetime.fromtimestamp(exp).isoformat(timespec='minutes') if exp else 'unknown'}")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="python -m backend.app.cli", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -178,6 +207,9 @@ def main(argv=None) -> int:
     p.add_argument("--name")
     p.add_argument("--password-env", help="read the password from this environment variable instead of prompting")
     p.set_defaults(func=lambda a: asyncio.run(_create_user(a)))
+    p = sub.add_parser("broker-login", help="log in to Angel One now (as the 08:30 schedule does) and check it")
+    p.add_argument("--check", action="store_true", help="only check the saved token; do not log in")
+    p.set_defaults(func=cmd_broker_login)
     args = parser.parse_args(argv)
     return args.func(args)
 

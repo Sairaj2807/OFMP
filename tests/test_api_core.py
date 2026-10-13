@@ -153,6 +153,17 @@ def test_health_without_dependencies_and_auth_unavailable():
 class FakeGateway:
     def __init__(self):
         self.snapshots = 0
+        self.broker = None             # a broker session's status, when a test gives it one
+        self.relogins = 0
+
+    def broker_status(self):
+        return self.broker
+
+    def broker_relogin(self):
+        if self.broker is None:
+            return False
+        self.relogins += 1
+        return True
 
     def active_contract(self):
         return {"tradingsymbol": "NIFTY27OCT26FUT"}

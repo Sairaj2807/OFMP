@@ -36,6 +36,21 @@ def _default_credentials() -> dict:
             "api_key": angel_client.autologin.API_KEY, "client_code": angel_client.autologin.CLIENT_CODE}
 
 
+def _default_auth_failed() -> None:
+    import angel_client
+    angel_client.mark_token_invalid()
+
+
+def http_status(exc: BaseException):
+    """The HTTP status of a rejected WebSocket handshake (websockets >= 14 and older), else None."""
+    response = getattr(exc, "response", None)
+    code = getattr(response, "status_code", None) or getattr(exc, "status_code", None)
+    return int(code) if code is not None else None
+
+
+AUTH_STATUSES = (401, 403)
+
+
 async def _default_connect(url: str, headers: dict):
     kwargs = dict(open_timeout=15, ping_interval=None)
     try:
@@ -50,12 +65,14 @@ class AngelOneProvider(MarketDataProvider):
     def __init__(self, credentials: Callable[[], dict] = _default_credentials,
                  connect: Callable = _default_connect, url: str = WS_URL,
                  heartbeat_sec: float = HEARTBEAT_INTERVAL_SEC,
-                 clock_ms: Callable[[], int] = lambda: int(time.time() * 1000)):
+                 clock_ms: Callable[[], int] = lambda: int(time.time() * 1000),
+                 on_auth_failed: Callable[[], None] = _default_auth_failed):
         self._credentials = credentials
         self._connect = connect
         self._url = url
         self._heartbeat_sec = heartbeat_sec
         self._clock_ms = clock_ms
+        self._on_auth_failed = on_auth_failed
         self._ws = None
         self._segments: dict = {}   # token -> exchange segment, for tagging ticks
 
@@ -67,7 +84,14 @@ class AngelOneProvider(MarketDataProvider):
             "x-client-code": creds["client_code"],
             "x-feed-token": creds["feed_token"],
         }
-        self._ws = await self._connect(self._url, headers)
+        try:
+            self._ws = await self._connect(self._url, headers)
+        except Exception as e:
+            if http_status(e) in AUTH_STATUSES:
+                # a cancelled token can still look unexpired: never retry with it
+                log.warning("angelone rejected the feed token (HTTP %s): next connect logs in afresh", http_status(e))
+                self._on_auth_failed()
+            raise
 
     async def _send_subscription(self, action: int, instruments: Iterable[InstrumentRef]) -> None:
         by_type: dict = {}

@@ -89,6 +89,15 @@ INSTRUMENTS_CACHE_FILE = os.environ.get("INSTRUMENTS_CACHE_FILE", "instruments_c
 #             broker connection and publishes ticks to Redis; the API consumes
 #             them. API restarts then leave the broker connection untouched.
 INGEST_MODE = os.environ.get("INGEST_MODE", "embedded")
+
+# Daily broker session (backend/app/services/broker_session.py): Angel One login
+# before each NSE session, feed off after the close. On by default for the live
+# Angel feed in this process; BROKER_SCHEDULE=0 keeps the old always-connected feed.
+BROKER_SCHEDULE = os.environ.get("BROKER_SCHEDULE", "1") not in ("0", "false", "no")
+BROKER_LOGIN_LEAD_MIN = int(os.environ.get("BROKER_LOGIN_LEAD_MIN", "45"))          # 09:15 open -> 08:30
+BROKER_GIVE_UP_LEAD_MIN = int(os.environ.get("BROKER_GIVE_UP_LEAD_MIN", "5"))       # retries until 09:10
+BROKER_STOP_AFTER_CLOSE_MIN = int(os.environ.get("BROKER_STOP_AFTER_CLOSE_MIN", "15"))   # 15:30 -> 15:45
+BROKER_RETRY_SEC = int(os.environ.get("BROKER_RETRY_SEC", "120"))
 if INGEST_MODE not in ("embedded", "redis"):
     raise ValueError(f"INGEST_MODE must be 'embedded' or 'redis', got {INGEST_MODE!r}")
 # Default points at this project's dev Redis (docker-compose.dev.yml, port 56379),

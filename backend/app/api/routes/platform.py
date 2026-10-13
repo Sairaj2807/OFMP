@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.api.deps import get_auth_service, request_info, require_permission
+from backend.app.core.permissions import has_permission
 from backend.app.api.schemas import Page
 from backend.app.core.errors import AppError
 from backend.app.domain.profile import DEFAULT_ROW, MAX_HISTORY_SESSIONS, ROW_SIZES
@@ -72,13 +73,27 @@ async def health(request: Request):
 
 # ---- market ------------------------------------------------------------------------
 
-@market_router.get("/status", dependencies=[Depends(require_permission("market.read"))],
-                   summary="Active contract and live feed status")
-async def market_status(request: Request):
+market_read = require_permission("market.read")
+
+
+@market_router.get("/status", summary="Active contract, live feed and broker session status")
+async def market_status(request: Request, user: AuthUser = Depends(market_read)):
     gw = _gateway(request)
     calendar = request.app.state.market_calendar
     return {"contract": gw.active_contract(), "feed": gw.feed_status(),
-            "session": calendar.status(datetime.now(timezone.utc))}
+            "session": calendar.status(datetime.now(timezone.utc)),
+            "broker": _broker_view(gw, user)}
+
+
+# what every user may see of the broker session; the error text and login details are admin-only
+_BROKER_PUBLIC = ("state", "feed_on", "logged_in_at", "next_action", "next_action_at")
+
+
+def _broker_view(gw, user) -> Optional[dict]:
+    status = gw.broker_status() if hasattr(gw, "broker_status") else None
+    if status is None:
+        return None
+    return status if has_permission(user.role, "admin.system") else {k: status.get(k) for k in _BROKER_PUBLIC}
 
 
 @market_router.get("/replay/sessions", dependencies=[Depends(require_permission("market.read"))],
@@ -199,6 +214,26 @@ async def admin_system(request: Request):
     gw = getattr(request.app.state, "market", None)
     hub = getattr(request.app.state, "stream_hub", None)
     return {"feed": gw.feed_status() if gw else None,
+            "broker_session": gw.broker_status() if gw and hasattr(gw, "broker_status") else None,
             "database_writer": gw.database_stats() if gw else None,
             "websocket": hub.stats() if hub else None,
             "database": {True: "ok", False: "unavailable", None: "not_configured"}[await _database_ok(request)]}
+
+
+# (not `admin_system`: that name is rebound by the /admin/system handler above)
+broker_admin = require_permission("admin.system")
+
+
+@admin_router.post("/broker/relogin", summary="Log in to the broker again now (and restart the day inside market hours)")
+async def broker_relogin(request: Request, user: AuthUser = Depends(broker_admin)):
+    gw = _gateway(request)
+    if not (hasattr(gw, "broker_relogin") and gw.broker_relogin()):
+        raise AppError("BROKER_SESSION_UNAVAILABLE", "no scheduled broker session (synthetic feed or worker mode)", 409)
+    engine = getattr(request.app.state, "db_engine", None)
+    if engine is not None:
+        info = request_info(request)
+        async with engine.begin() as conn:
+            await conn.execute(audit_logs.insert().values(
+                actor_user_id=user.id, action="broker.relogin", target_type="broker", target_id="angelone",
+                ip=info.ip, user_agent=info.user_agent, request_id=info.request_id, details={}))
+    return {"accepted": True}
