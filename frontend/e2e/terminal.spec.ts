@@ -391,6 +391,7 @@ test("multi-day footprint: sessions selector capped by interval, loads sessions 
   // 1-minute bars: at most 5 earlier sessions
   await expect(select.locator("option")).toHaveText(["Today", "5 days + today"]);
 
+  await select.selectOption("0");                                          // saved state may hold another choice
   const listed = page.waitForRequest(/\/api\/v1\/market\/footprint\/sessions\?interval=60$/);
   const today = page.waitForResponse(/\/api\/v1\/market\/footprint\/history\?date=.*&interval=60&ppr=\d$/);
   await select.selectOption("5");
@@ -408,4 +409,44 @@ test("multi-day footprint: sessions selector capped by interval, loads sessions 
   await select.selectOption("0");
   await expect(page.getByLabel(/Session figures/)).toContainText("CVD since start");
   await chart.getByRole("button", { name: "1m" }).click();
+});
+
+test("footprint table: on by default, rows chosen per chart and saved, values come from the stream", async ({ page }) => {
+  await openTerminal(page);
+  await page.getByRole("button", { name: "1 chart" }).click();
+  const chart = page.getByRole("region", { name: "Chart c1" });
+  await chart.click();
+  await page.getByRole("button", { name: "Order-flow footprint on chart c1" }).click();
+  const table = chart.getByRole("button", { name: "Table", exact: true });
+  if ((await table.getAttribute("aria-pressed")) !== "true") await table.click();
+
+  // the live stream carries the table's fields on every bar
+  const ws = await page.evaluate(async () => {
+    const res = await fetch("/api/v1/market/footprint/history?date=" + new Date(Date.now() + 5.5 * 3600e3)
+      .toISOString().slice(0, 10) + "&interval=60&ppr=1");
+    const day = res.ok ? await res.json() : null;
+    return day?.bars?.[0] ? Object.keys(day.bars[0]) : [];
+  });
+  expect(ws).toEqual(expect.arrayContaining(["volume", "vpoc", "vpoc_volume", "cot", "oi", "doi"]));
+
+  await chart.getByRole("button", { name: "Table rows" }).click();
+  const oi = page.getByRole("checkbox", { name: "OI", exact: true });
+  await oi.check();                                                         // saved state may hold another choice
+  await expect(oi).toBeChecked();
+  await oi.uncheck();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: /Workspace/ })).toContainText("Saved", { timeout: 5_000 });
+  await page.reload();
+  await expect(page.getByRole("button", { name: /Workspace/ })).toContainText(/Saved|Saving/);
+  await chart.getByRole("button", { name: "Table rows" }).click();
+  await expect(page.getByRole("checkbox", { name: "OI", exact: true })).not.toBeChecked();
+  await expect(page.getByRole("checkbox", { name: "dOI", exact: true })).toBeChecked();
+  await page.getByRole("checkbox", { name: "OI", exact: true }).check();
+  await page.keyboard.press("Escape");
+
+  await table.click();
+  await expect(table).toHaveAttribute("aria-pressed", "false");
+  await table.click();
+  await expect(table).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: /Workspace/ })).toContainText("Saved", { timeout: 5_000 });
 });

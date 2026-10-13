@@ -1,16 +1,17 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { FootprintChart } from "@/components/chart/FootprintChart";
 import { MultiDayProfileChart } from "@/components/chart/MultiDayProfileChart";
 import { Button, Select } from "@/components/ui/controls";
 import { type ChartStats, useLiveStats } from "@/hooks/useLiveStream";
 import { dayCap } from "@/lib/chart/footprintSessions";
+import { TABLE_ROW_LABELS } from "@/lib/chart/footprintTable";
 import { intervalLabel } from "@/lib/format";
 import { useSession } from "@/stores/session";
 import {
-  type CellStyle, type ChartConfig, type DisplayMode, FOOTPRINT_DAYS, PROFILE_DAYS, PROFILE_ROWS, useTerminal,
+  type CellStyle, type ChartConfig, type DisplayMode, FOOTPRINT_DAYS, PROFILE_DAYS, PROFILE_ROWS, TABLE_ROWS, useTerminal,
 } from "@/stores/terminal";
 import { ReplayBar, loadReplaySessions } from "./ReplayBar";
 
@@ -110,6 +111,10 @@ export function ChartPanel({ config }: { config: ChartConfig }) {
             <Button active={config.showValueArea} onClick={() => update(config.id, { showValueArea: !config.showValueArea })}>VA</Button>
             <Button active={config.showImbalances} onClick={() => update(config.id, { showImbalances: !config.showImbalances })}
                     title="Stacked imbalances (engine rule v1, ratio 3)">Imb</Button>
+            <span className="mx-1 h-4 w-px bg-line" aria-hidden />
+            <Button active={config.showTable} onClick={() => update(config.id, { showTable: !config.showTable })}
+                    title="Table under the candles: Volume, VPOC, VPOC Vol, COT (buy − sell), OI, dOI">Table</Button>
+            <TableRowsMenu config={config} onChange={(tableRows) => update(config.id, { tableRows, showTable: true })} />
           </>
         )}
       </div>
@@ -121,5 +126,53 @@ export function ChartPanel({ config }: { config: ChartConfig }) {
                             onStats={onStats} />}
       </div>
     </section>
+  );
+}
+
+/** Which footprint-table rows to show (saved per chart). A fixed-position popup: the toolbar scrolls
+ *  horizontally, which would clip an absolutely positioned one. */
+function TableRowsMenu({ config, onChange }: { config: ChartConfig; onChange: (rows: ChartConfig["tableRows"]) => void }) {
+  const [at, setAt] = useState<{ top: number; right: number } | null>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const popupRef = useRef<HTMLFieldSetElement>(null);
+
+  useEffect(() => {
+    if (!at) return;
+    const close = (e: Event) => {
+      const t = e.target as Node;
+      if (!popupRef.current?.contains(t) && !buttonRef.current?.contains(t)) setAt(null);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setAt(null);
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [at]);
+
+  const toggle = () => {
+    const box = buttonRef.current?.getBoundingClientRect();
+    setAt(at || !box ? null : { top: box.bottom + 4, right: window.innerWidth - box.right });
+  };
+  return (
+    <>
+      <button ref={buttonRef} type="button" aria-label="Table rows" aria-expanded={!!at} aria-haspopup="true"
+              onClick={toggle} title="Choose the table's rows"
+              className="h-6 rounded px-1.5 text-[12px] text-fg-2 transition-colors hover:bg-raised hover:text-fg">▾</button>
+      {at && (
+        <fieldset ref={popupRef} style={{ top: at.top, right: at.right }}
+                  className="fixed z-50 w-36 rounded border border-line-strong bg-raised p-2 text-[12px] shadow-lg">
+          <legend className="sr-only">Table rows</legend>
+          {TABLE_ROWS.map((row) => (
+            <label key={row} className="flex cursor-pointer items-center gap-2 py-0.5">
+              <input type="checkbox" checked={config.tableRows.includes(row)}
+                     onChange={(e) => onChange(TABLE_ROWS.filter((r) => (r === row ? e.target.checked : config.tableRows.includes(r))))} />
+              {TABLE_ROW_LABELS[row]}
+            </label>
+          ))}
+        </fieldset>
+      )}
+    </>
   );
 }

@@ -19,6 +19,9 @@ class Footprint:
         # cells afterwards, so they have to be tracked as trades arrive. The
         # order-flow chart's min/max-delta rows are built from this.
         self.candle_stats: dict = {}
+        # candle_ts -> open interest on the candle's last trade that carried one
+        # (the candle's closing OI; absent when no trade in it had OI).
+        self.candle_oi: dict = {}
 
     def _bucket_price(self, price: float) -> float:
         return round(round(price / self.tick_size) * self.tick_size, 8)
@@ -54,6 +57,8 @@ class Footprint:
         if stats["run"] > stats["max"]:
             stats["max"] = stats["run"]
         stats["trades"] += 1
+        if trade.open_interest is not None:
+            self.candle_oi[candle_ts] = trade.open_interest
 
         ohlc = self.candle_ohlc.get(candle_ts)
         if ohlc is None:
@@ -147,3 +152,4 @@ class Footprint:
             del self.data[ts]
             self.candle_stats.pop(ts, None)
             self.candle_ohlc.pop(ts, None)
+            self.candle_oi.pop(ts, None)

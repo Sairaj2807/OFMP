@@ -1228,3 +1228,62 @@ Done on 2026-10-12.
 
 **Limitations:** replay shows one session. Days recorded before contract tagging are excluded. Volume
 profile/statistics across several days are not part of this change.
+
+## 28. Footprint table: Volume, VPOC, VPOC Vol, COT, OI, dOI
+
+Done on 2026-10-13.
+
+**Owner decisions:**
+- COT = each candle's buy − sell volume.
+- dOI on a session's first candle compares with the previous session's close.
+- Store OI with each trade and recompute the rest.
+- VPOC drawn as a pink line on the candles.
+
+**Storage:**
+- `trades.open_interest` (migration 0005) is written from the tick that produced each trade. Ticks
+  already carried OI (Angel One SnapQuote) and `raw_ticks` stored it, but trades did not.
+- The migration fills stored trades from `raw_ticks`.
+- Volume, VPOC and COT stay derived from the stored trades, so they cannot drift from the chart.
+
+**Engine:**
+- `Trade.open_interest` and `Footprint.candle_oi` hold each native candle's closing OI: the last trade in
+  it that carried one.
+- Live ticks, the startup restore, replay (from the stored column when the record predates `oi`) and history
+  all feed it.
+- The observation record gained `oi`.
+
+**Payload:** `chart_payload` adds `volume`, `cot`, `vpoc`, `vpoc_volume`, `oi` and `doi` to every display
+bar.
+- VPOC is computed on the grouped bar's cells at the row size. Its tie rule (higher price) matches the
+  chart library's POC, so the pink line and the table agree.
+- dOI compares with the latest earlier native candle the engine holds, inside the window or not. For the
+  first candle it uses `oi_before`: the previous stored session's closing OI, found by
+  `last_open_interest_before` (live: at restore; history: per day; replay: at open).
+- `FOOTPRINT_VERSION` is now `footprint-v2`, so browsers drop days cached without these fields.
+
+**Frontend:**
+- `FootprintTable` primitive: fixed row labels; cells aligned to the footprint columns; full → compact →
+  dot as columns narrow.
+- COT and dOI are coloured by sign and the VPOC rows are pink.
+- Hovering a cell shows exact values. Units follow Qty/Lots.
+- The price scale's bottom margin is set to the table height, so candles stay above it.
+- Toolbar: Table toggle plus a ▾ row picker (a fixed popup, since the toolbar scrolls). Saved per chart,
+  layout v8.
+
+**Verified:**
+- Backend: 380 tests.
+  - Golden digests are unchanged with the new fields excluded, so every existing output is identical.
+  - New `tests/test_footprint_table.py`: VPOC tie rule, closing OI and dOI at 1m/5m, a limited window's
+    first bar, live = replay = restore at 1/3/5 m, trade rows, OI round trip and the previous-close baseline,
+    the 0005 backfill rules, history days using the baseline.
+- `alembic check`: no drift.
+- Frontend: 51 unit tests; 14/14 Playwright tests, including a table test (rows saved across a reload,
+  toggle, the fields present).
+- Checked by eye with real 08 and 12 Oct data at 5 m.
+
+**Limitations:**
+- OI changes in steps (88 changes on 13 Oct to ~14k ticks), so 1 m dOI is often 0.
+- The baseline is the previous *stored* session: with 09 Oct not recorded, 12 Oct's first dOI is measured
+  against 08 Oct.
+- Days without stored raw ticks (30 Sep) have no OI.
+- Futures OI only.

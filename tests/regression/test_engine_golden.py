@@ -23,7 +23,14 @@ import orderbook_engine as oe
 # Fields added to observation records after the baseline (additive metadata,
 # not engine output). Excluded from the digest so the pinned values stay
 # comparable with the baseline.
-ADDED_OBSERVATION_FIELDS = {"classifier_name", "classifier_version"}
+ADDED_OBSERVATION_FIELDS = {"classifier_name", "classifier_version", "oi"}
+# Footprint-table fields added to chart bars after the baseline (2026-10-13); pinned by
+# tests/test_footprint_table.py instead, so the digests keep proving the rest is unchanged.
+ADDED_BAR_FIELDS = {"volume", "cot", "vpoc", "vpoc_volume", "oi", "doi"}
+
+
+def _without_added(payload):
+    return {**payload, "bars": [{k: v for k, v in b.items() if k not in ADDED_BAR_FIELDS} for b in payload["bars"]]}
 
 
 def edge_ticks(seed):
@@ -76,15 +83,16 @@ def engine_outputs(seed):
     payloads = {}
     for ppr in (1, 2, 5):
         for interval in (60, 300, 1800):
-            payloads[f"chart_{ppr}_{interval}"] = server._chart_payload(
-                fp, eng.cvd_tracker.cvd, eng.last_candle_seen, ppr, interval_sec=interval, limit=10_000)
+            payloads[f"chart_{ppr}_{interval}"] = _without_added(server._chart_payload(
+                fp, eng.cvd_tracker.cvd, eng.last_candle_seen, ppr, interval_sec=interval, limit=10_000))
             payloads[f"table_{ppr}_{interval}"] = candle_table(
                 fp, eng.cvd_by_candle, ppr, interval_sec=interval, limit=10_000)
 
     for i, o in enumerate(observations):
         o["trade_id"] = i + 1
     rs = replay_engine.build_replay_state(observations, TICK)
-    replay = server._chart_payload(rs.footprint, rs.cvd_tracker.cvd, rs.last_candle_seen, 1, limit=10_000)
+    replay = _without_added(server._chart_payload(rs.footprint, rs.cvd_tracker.cvd, rs.last_candle_seen, 1,
+                                                  limit=10_000))
 
     return {
         "results": _digest(results),

@@ -71,6 +71,7 @@ def trade_row(obs: dict, provider: str, token: Optional[str] = None,
         "best_bid": obs.get("best_bid"),
         "best_ask": obs.get("best_ask"),
         "cumulative_volume": obs.get("cum_volume"),
+        "open_interest": obs.get("oi"),
         "features": obs,
     }
 

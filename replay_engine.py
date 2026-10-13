@@ -44,7 +44,8 @@ class ReplayState:
 
 def trades_from_record(obs: dict) -> list:
     """The Trade objects one saved record stands for (always one)."""
-    return [Trade(timestamp=obs["ts_ms"], price=obs["ltp"], quantity=obs["qty"], side=obs["algo_side"])]
+    return [Trade(timestamp=obs["ts_ms"], price=obs["ltp"], quantity=obs["qty"], side=obs["algo_side"],
+                  open_interest=obs.get("oi"))]
 
 
 def record_summary(obs: dict) -> dict:

@@ -14,17 +14,19 @@ from .schema import instruments, raw_ticks, trades
 async def load_session_trades(engine: AsyncEngine, provider: str, symbol: str, session_date: date) -> list:
     """One contract's trades for one session, oldest first, as observation
     dicts (the stored features record, with trade_id)."""
-    stmt = (sa.select(trades.c.features, trades.c.trade_seq, trades.c.trade_ts)
+    stmt = (sa.select(trades.c.features, trades.c.trade_seq, trades.c.trade_ts, trades.c.open_interest)
             .where(trades.c.provider == provider, trades.c.symbol == symbol,
                    trades.c.session_date == session_date)
             .order_by(trades.c.trade_ts, trades.c.trade_seq))
     async with engine.connect() as conn:
         rows = (await conn.execute(stmt)).all()
     out = []
-    for features, seq, ts in rows:
+    for features, seq, ts, oi in rows:
         obs = dict(features)
         obs["trade_id"] = seq
         obs["ts_ms"] = dt_to_ms(ts)
+        if obs.get("oi") is None:
+            obs["oi"] = oi
         out.append(obs)
     return out
 
@@ -99,19 +101,33 @@ async def untagged_session_dates(engine: AsyncEngine, provider: str, before: dat
         return [d for (d,) in (await conn.execute(stmt)).all()]
 
 
-async def load_symbol_sessions(engine: AsyncEngine, provider: str, symbol: str, dates: list) -> dict:
+async def load_symbol_sessions(engine: AsyncEngine, provider: str, symbol: str, dates: list,
+                               with_oi: bool = False) -> dict:
     """{session_date: [(ts_ms, price, qty, side), ...] oldest first} for one contract and the given
-    dates: only what a market profile needs (no features JSONB), in one query."""
+    dates: only what a market profile needs (no features JSONB), in one query. `with_oi` appends
+    each trade's open interest: (ts_ms, price, qty, side, oi)."""
     if not dates:
         return {}
-    stmt = (sa.select(trades.c.session_date, trades.c.trade_ts, trades.c.price, trades.c.qty, trades.c.side)
+    stmt = (sa.select(trades.c.session_date, trades.c.trade_ts, trades.c.price, trades.c.qty, trades.c.side,
+                      trades.c.open_interest)
             .where(trades.c.provider == provider, trades.c.symbol == symbol, trades.c.session_date.in_(dates))
             .order_by(trades.c.session_date, trades.c.trade_ts, trades.c.trade_seq))
     out: dict = {d: [] for d in dates}
     async with engine.connect() as conn:
-        for d, ts, price, qty, side in (await conn.execute(stmt)).all():
-            out[d].append((dt_to_ms(ts), price, qty, side))
+        for d, ts, price, qty, side, oi in (await conn.execute(stmt)).all():
+            out[d].append((dt_to_ms(ts), price, qty, side, oi) if with_oi else (dt_to_ms(ts), price, qty, side))
     return out
+
+
+async def last_open_interest_before(engine: AsyncEngine, provider: str, symbol: str, before: date) -> Optional[int]:
+    """The closing OI of `symbol`'s latest stored session before `before` (None if unknown):
+    the baseline for the first candle's dOI."""
+    stmt = (sa.select(trades.c.open_interest)
+            .where(trades.c.provider == provider, trades.c.symbol == symbol, trades.c.session_date < before,
+                   trades.c.open_interest.is_not(None))
+            .order_by(trades.c.trade_ts.desc(), trades.c.trade_seq.desc()).limit(1))
+    async with engine.connect() as conn:
+        return (await conn.execute(stmt)).scalar_one_or_none()
 
 
 async def raw_tick_count(engine: AsyncEngine) -> int:
@@ -119,16 +135,19 @@ async def raw_tick_count(engine: AsyncEngine) -> int:
         return (await conn.execute(sa.select(sa.func.count()).select_from(raw_ticks))).scalar_one()
 
 
-async def load_session_tape(engine: AsyncEngine, provider: str, symbol: str, session_date: date) -> tuple:
+async def load_session_tape(engine: AsyncEngine, provider: str, symbol: str, session_date: date,
+                            with_oi: bool = False) -> tuple:
     """What restoring a live session needs, without the heavy features column:
-    ([(ts_ms, price, qty, side), ...] oldest first, last trade's (bid_levels, ask_levels))."""
+    ([(ts_ms, price, qty, side), ...] oldest first, last trade's (bid_levels, ask_levels)).
+    `with_oi` appends each trade's open interest to its tuple."""
     base = (trades.c.provider == provider, trades.c.symbol == symbol, trades.c.session_date == session_date)
-    tape_stmt = (sa.select(trades.c.trade_ts, trades.c.price, trades.c.qty, trades.c.side)
+    tape_stmt = (sa.select(trades.c.trade_ts, trades.c.price, trades.c.qty, trades.c.side, trades.c.open_interest)
                  .where(*base).order_by(trades.c.trade_ts, trades.c.trade_seq))
     last_stmt = (sa.select(trades.c.features["bid_levels"], trades.c.features["ask_levels"])
                  .where(*base).order_by(trades.c.trade_ts.desc(), trades.c.trade_seq.desc()).limit(1))
     async with engine.connect() as conn:
-        tape = [(dt_to_ms(ts), price, qty, side) for ts, price, qty, side in (await conn.execute(tape_stmt)).all()]
+        tape = [(dt_to_ms(ts), price, qty, side, oi) if with_oi else (dt_to_ms(ts), price, qty, side)
+                for ts, price, qty, side, oi in (await conn.execute(tape_stmt)).all()]
         last = (await conn.execute(last_stmt)).first()
     return tape, (tuple(last) if last else (None, None))
 
@@ -137,15 +156,17 @@ async def load_trades_by_date(engine: AsyncEngine, provider: str, session_date: 
     """Every stored trade of one session, oldest first, as observation dicts
     (features + trade_id + ts_ms) — the input replay needs. Includes sessions
     recorded before trades were tagged with a symbol."""
-    stmt = (sa.select(trades.c.features, trades.c.trade_seq, trades.c.trade_ts)
+    stmt = (sa.select(trades.c.features, trades.c.trade_seq, trades.c.trade_ts, trades.c.open_interest)
             .where(trades.c.provider == provider, trades.c.session_date == session_date)
             .order_by(trades.c.trade_ts, trades.c.trade_seq))
     async with engine.connect() as conn:
         rows = (await conn.execute(stmt)).all()
     out = []
-    for features, seq, ts in rows:
+    for features, seq, ts, oi in rows:
         obs = dict(features)
         obs["trade_id"] = seq
         obs["ts_ms"] = dt_to_ms(ts)
+        if obs.get("oi") is None:
+            obs["oi"] = oi
         out.append(obs)
     return out

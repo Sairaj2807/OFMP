@@ -105,6 +105,7 @@ trades = sa.Table(
     sa.Column("best_bid", sa.Float),
     sa.Column("best_ask", sa.Float),
     sa.Column("cumulative_volume", sa.BigInteger),
+    sa.Column("open_interest", sa.BigInteger),             # OI on the trade's tick (NULL: unknown)
     sa.Column("features", JSONB),                          # full observation record (research)
     sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False, server_default=NOW),
     sa.UniqueConstraint("provider", "session_date", "trade_seq", "trade_ts"),

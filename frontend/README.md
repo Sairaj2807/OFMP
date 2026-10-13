@@ -149,6 +149,29 @@ The coordinate model is `src/lib/chart/multiDay.ts` and the renderer is
 
 Zoom levels are saved per chart. Details are in `docs/market-profile.md`.
 
+## Footprint table
+
+Under the candles, one column per candle (owner decisions 2026-10-13):
+
+| Row | Meaning |
+|---|---|
+| Volume | buy + sell volume |
+| VPOC | the price row with the most volume, at the chart's ₹/row (a tie goes to the higher price) |
+| VPOC Vol | the volume at that row |
+| COT | buy − sell volume: positive = buyers more aggressive (green), negative = sellers (red) |
+| OI | closing open interest of the candle |
+| dOI | change from the previous candle; the session's first candle compares with the previous session's close |
+
+- The server computes every value (`domain/orderflow/chart.py`), so live, replay and earlier sessions agree.
+  OI is stored with each trade.
+- Volumes and OI follow Qty/Lots. Unknown values show "—". Narrow columns use 12.4K / 18.4M forms, and a
+  colour dot when there is no room for text. Hover a cell for the candle's exact values.
+- **Table** turns it on or off; ▾ chooses rows. Both are saved per chart (layout format v8). The table
+  replaces the per-candle Volume/Delta card.
+- POC (= VPOC) is drawn as a pink outline on each candle.
+
+The drawing layer is `src/lib/chart/footprintTable.ts`.
+
 ## Multi-day footprint
 
 **Footprint sessions** (live only) shows finished sessions of the active contract to the left of today:

@@ -107,7 +107,7 @@ def process_tick(state: TickProcessorState, tick: dict,
                  on_trade: Optional[Callable[[TradeEvent], None]] = None) -> dict:
     """Runs one tick through the pipeline.
 
-    tick: {"ltp": float, "ltt": int (epoch ms), "cum_volume": int,
+    tick: {"ltp": float, "ltt": int (epoch ms), "cum_volume": int, "oi": int | None,
            "depth_buy"/"depth_sell": [(price, qty, orders), ...]}
 
     on_trade: optional callable(TradeEvent), invoked once per classified
@@ -158,7 +158,8 @@ def process_tick(state: TickProcessorState, tick: dict,
     state.last_price, state.last_side = price, side
     state.last_classification = classification
 
-    candle_ts = state.footprint.add_trade(Trade(timestamp=tick["ltt"], price=price, quantity=qty, side=side))
+    candle_ts = state.footprint.add_trade(Trade(timestamp=tick["ltt"], price=price, quantity=qty, side=side,
+                                                open_interest=tick.get("oi")))
     result.update(new_trade=True, candle_ts=candle_ts, side=side, qty=qty)
     advance_candle(state, candle_ts)
 

@@ -77,6 +77,10 @@ describe("config migration", () => {
     expect(v6.charts.map((c) => [c.profileZoomY, c.profileZoomX])).toEqual([[12, 1.5], [0, 0], [0, 0], [0, 0]]);
     const v7 = migrateConfig({ charts: [{ id: "c1", footprintDays: 10 }, { id: "c2", footprintDays: 3 }] });
     expect(v7.charts.map((c) => c.footprintDays)).toEqual([10, 0, 0, 0]);
+    const v8 = migrateConfig({ charts: [{ id: "c1", showTable: false, tableRows: ["oi", "bogus", "volume"] }, { id: "c2" }] });
+    expect(v8.charts.map((c) => [c.showTable, c.tableRows])).toEqual([
+      [false, ["volume", "oi"]], [true, ["volume", "vpoc", "vpocVol", "cot", "oi", "doi"]],
+      [true, ["volume", "vpoc", "vpocVol", "cot", "oi", "doi"]], [true, ["volume", "vpoc", "vpocVol", "cot", "oi", "doi"]]]);
     expect(migrateConfig("garbage")).toEqual(initialTerminal);
   });
 });

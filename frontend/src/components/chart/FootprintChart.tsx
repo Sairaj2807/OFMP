@@ -35,7 +35,9 @@ export function FootprintChart({ config, units, lotSize, tickSize, onStats }: Pr
   const controllerRef = useRef<FootprintController | null>(null);
   const [ready, setReady] = useState(false);
   const onStatsRef = useRef(onStats);
-  const { id, cellStyle, displayMode, showPoc, showValueArea, showImbalances, ppr, interval, mode, footprintDays } = config;
+  const { id, cellStyle, displayMode, showPoc, showValueArea, showImbalances, ppr, interval, mode, footprintDays,
+          showTable, tableRows } = config;
+  const tableKey = tableRows.join(",");
   const days = mode === "live" ? effectiveDays(footprintDays, interval) : 0;
 
   useEffect(() => {
@@ -180,6 +182,10 @@ export function FootprintChart({ config, units, lotSize, tickSize, onStats }: Pr
   useEffect(() => {
     controllerRef.current?.setUnits({ units, lotSize, tickSize });
   }, [units, lotSize, tickSize]);
+
+  useEffect(() => {
+    if (ready) controllerRef.current?.setTable(showTable, tableKey ? (tableKey.split(",") as typeof tableRows) : []);
+  }, [ready, showTable, tableKey]);
 
   return (
     <div className="relative h-full w-full" data-testid={`chart-${id}`}>

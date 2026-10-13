@@ -29,7 +29,7 @@ The dev password in `docker-compose.dev.yml` and `.env.example` is for local use
 | Table | Kind | Key / indexes | Written by |
 |---|---|---|---|
 | `raw_ticks` | hypertable on `received_at`, 1-day chunks | unique (provider, token, received_at, sequence) | the process holding the broker connection |
-| `trades` | hypertable on `trade_ts`, 1-day chunks | unique (provider, session_date, trade_seq, trade_ts); index (symbol, trade_ts DESC) | API process, one row per classified trade |
+| `trades` | hypertable on `trade_ts`, 1-day chunks | unique (provider, session_date, trade_seq, trade_ts); index (symbol, trade_ts DESC) | API process, one row per classified trade, with the open interest of its tick (`open_interest`, migration 0005) |
 | `data_quality_events` | table | (detected_at DESC), (kind, detected_at DESC) | the process holding the broker connection |
 | `instruments` | table | unique (provider, token); (name, instrument_type, expiry); (symbol) | API, when a contract is activated |
 | `algorithm_versions` | table | unique (kind, name, version) | migration seed |
@@ -85,6 +85,10 @@ Turn restore off with `RESTORE_SESSION_ON_START=0`.
 ## Migrations
 
 - `backend/alembic/versions/0001_initial_market_data_schema.py`
+- `0005_trade_open_interest.py` adds `trades.open_interest` and fills it for stored trades from `raw_ticks`
+  (same token, the latest tick at or before the trade, received within two minutes). Trades without a
+  token or a matching tick stay NULL. On the dev database (2026-10-13) every tagged trade of 08, 12 and
+  13 Oct was filled in 6 s; 30 Sep has no stored raw ticks, so its OI is unknown.
 - Tested: upgrade, downgrade to base, and upgrade again; `alembic check` reports no drift between the
   code schema and the migration.
 - New change: `python -m alembic revision --autogenerate -m "..."`. Review the generated file, then

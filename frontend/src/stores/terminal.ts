@@ -2,6 +2,7 @@
 // JSON, and synced to the signed-in user's server-side workspace (see
 // hooks/useWorkspaces.ts) — the same versioned shape in both places, so an
 // older saved layout is migrated, never discarded.
+import { TABLE_ROWS, type TableRow } from "@/lib/chart/footprintTable";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
@@ -16,6 +17,7 @@ export const DEFAULT_PROFILE_ROW = 5;
 export type ProfileMode = "stacked" | "split";
 export const PROFILE_DAYS = [0, 5, 10, 20] as const;                // finished sessions shown before today
 export const FOOTPRINT_DAYS = [0, 5, 10, 20] as const;              // capped by interval (lib/chart/footprintSessions)
+export { TABLE_ROWS, type TableRow } from "@/lib/chart/footprintTable";
 
 export interface ChartConfig {
   id: string;
@@ -35,6 +37,8 @@ export interface ChartConfig {
   profileZoomY: number;      // market profile price zoom, px per row (0 = fit)
   profileZoomX: number;      // market profile day-column zoom, width multiplier (0 = fit)
   footprintDays: number;     // footprint: finished sessions to the left of today (0 = today only)
+  showTable: boolean;        // footprint table under the candles (Volume, VPOC, VPOC Vol, COT, OI, dOI)
+  tableRows: TableRow[];     // rows shown, in the table's fixed order
 }
 
 export const CHART_IDS = ["c1", "c2", "c3", "c4"] as const;
@@ -45,6 +49,7 @@ const defaultChart = (id: string, interval: number): ChartConfig => ({
   showPoc: true, showValueArea: true, showImbalances: true, mode: "live", replayDate: null,
   view: "footprint", profileRow: DEFAULT_PROFILE_ROW, profileMode: "stacked", profileDays: 0,
   profileZoomY: 0, profileZoomX: 0, footprintDays: 0,
+  showTable: true, tableRows: [...TABLE_ROWS],
 });
 
 /** The persisted/synced part of the terminal state. */
@@ -71,7 +76,7 @@ export const initialTerminal: TerminalConfig = {
 };
 
 export const STORAGE_KEY = "ofmp.terminal";
-export const STORAGE_VERSION = 7;
+export const STORAGE_VERSION = 8;
 
 /**
  * Brings any saved config (localStorage or a server workspace, any version)
@@ -83,6 +88,7 @@ export const STORAGE_VERSION = 7;
  *   v4 -> v5: charts gained profileDays (existing profiles show today only).
  *   v5 -> v6: charts gained profileZoomY/profileZoomX (0 = fit, the previous behaviour).
  *   v6 -> v7: charts gained footprintDays (existing footprints show today only).
+ *   v7 -> v8: charts gained showTable/tableRows (the footprint table, on with every row).
  */
 export function migrateConfig(raw: unknown): TerminalConfig {
   const src = (raw && typeof raw === "object" ? raw : {}) as Partial<TerminalConfig>;
@@ -105,6 +111,9 @@ export function migrateConfig(raw: unknown): TerminalConfig {
       c.profileZoomY = 0;
     }
     if (!(FOOTPRINT_DAYS as readonly number[]).includes(c.footprintDays)) c.footprintDays = 0;
+    if (typeof c.showTable !== "boolean") c.showTable = true;
+    c.tableRows = Array.isArray(c.tableRows)
+      ? TABLE_ROWS.filter((r) => (c.tableRows as unknown[]).includes(r)) : [...TABLE_ROWS];
     if (typeof c.profileZoomX !== "number" || !(c.profileZoomX === 0 || (c.profileZoomX >= 0.35 && c.profileZoomX <= 3))) {
       c.profileZoomX = 0;
     }

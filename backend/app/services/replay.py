@@ -27,6 +27,7 @@ class ReplaySession:
         self.date = date
         self.records = records
         self.tick_size = tick_size
+        self.oi_before: Optional[int] = None   # previous session's closing OI (first candle's dOI)
         self._clock = clock
         self.start_ms = records[0]["ts_ms"]
         self.end_ms = records[-1]["ts_ms"]

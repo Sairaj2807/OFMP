@@ -34,7 +34,8 @@ from backend.app.domain.orderflow import Trade, restore_trades
 from backend.app.domain.orderflow.chart import chart_payload
 from backend.app.domain.profile import ALL_DAY_SESSION, NSE_SESSION, SessionProfile, build_profile
 from backend.app.infrastructure.postgres.database import create_engine as create_db_engine
-from backend.app.infrastructure.postgres.repositories import (load_session_tape, load_symbol_sessions,
+from backend.app.infrastructure.postgres.repositories import (last_open_interest_before, load_session_tape,
+                                                              load_symbol_sessions,
                                                               load_trades_by_date, previous_session_date,
                                                               symbol_session_dates, trade_counts_by_session,
                                                               untagged_session_dates, upsert_instrument)
@@ -190,11 +191,13 @@ async def _restore_session(engine: TickProcessorState, contract: dict) -> int:
     if db is None or config.SYNTHETIC_FEED:
         return 0
     symbol, today = contract["tradingsymbol"], ist_date(int(time.time() * 1000))
+    STATE["oi_before"] = None            # the dOI baseline belongs to the contract being restored
     try:
         await upsert_instrument(db, contract, instrument_type=config.INSTRUMENT_TYPE)
         if not config.RESTORE_SESSION_ON_START:
             return 0
-        tape, (bids, asks) = await load_session_tape(db, "angelone", symbol, today)
+        tape, (bids, asks) = await load_session_tape(db, "angelone", symbol, today, with_oi=True)
+        STATE["oi_before"] = await last_open_interest_before(db, "angelone", symbol, today)
         prev_day = await previous_session_date(db, "angelone", symbol, today)
         prev_tape = (await load_session_tape(db, "angelone", symbol, prev_day))[0] if prev_day else []
     except Exception as e:
@@ -207,9 +210,10 @@ async def _restore_session(engine: TickProcessorState, contract: dict) -> int:
         for ts, price, qty, side in prev_tape:
             previous.add_trade(ts, price, qty, side)
         engine.profile.previous = previous
-    for ts, price, qty, side in tape:
+    for ts, price, qty, side, _oi in tape:
         engine.profile.add_trade(ts, price, qty, side)
-    trades = [Trade(timestamp=ts, price=price, quantity=qty, side=side) for ts, price, qty, side in tape]
+    trades = [Trade(timestamp=ts, price=price, quantity=qty, side=side, open_interest=oi)
+              for ts, price, qty, side, oi in tape]
     return restore_trades(engine, trades, bids, asks)
 
 
@@ -372,11 +376,11 @@ def _clamp_chart_interval(value) -> int:
 
 def _chart_payload(fp, closed_cvd: int, open_ts: Optional[int], ppr: int,
                    interval_sec: int = config.CANDLE_INTERVAL_SEC,
-                   limit: int = CHART_BARS) -> dict:
+                   limit: int = CHART_BARS, oi_before: Optional[int] = None) -> dict:
     """The last `limit` candles as footprint columns (see domain/orderflow/chart.py,
     shared with replay and historical sessions)."""
     return chart_payload(fp, closed_cvd, open_ts, ppr, interval_sec=interval_sec, limit=limit,
-                         native_sec=config.CANDLE_INTERVAL_SEC)
+                         native_sec=config.CANDLE_INTERVAL_SEC, oi_before=oi_before)
 
 
 def _source_info() -> dict:
@@ -399,7 +403,8 @@ def _build_chart_snapshot(ppr: int = 1, interval_sec: int = config.CANDLE_INTERV
         "book": _book_payload(engine.book),
         "quote": _quote_payload(engine),
         "chart": _chart_payload(engine.footprint, engine.cvd_tracker.cvd,
-                                engine.last_candle_seen, ppr, interval_sec=interval_sec),
+                                engine.last_candle_seen, ppr, interval_sec=interval_sec,
+                                oi_before=STATE.get("oi_before")),
     }
 
 
@@ -439,11 +444,14 @@ def _footprint_history() -> Optional[FootprintHistory]:
             return await symbol_session_dates(db, "angelone", symbol, before, limit, date_from)
 
         async def load_days(symbol, dates):
-            return await load_symbol_sessions(db, "angelone", symbol, dates)
+            return await load_symbol_sessions(db, "angelone", symbol, dates, with_oi=True)
 
         async def list_untagged(before, date_from):
             return await untagged_session_dates(db, "angelone", before, date_from)
-        _FOOTPRINT_HISTORY = FootprintHistory(list_dates, load_days, list_untagged)
+
+        async def oi_before(symbol, day):
+            return await last_open_interest_before(db, "angelone", symbol, day)
+        _FOOTPRINT_HISTORY = FootprintHistory(list_dates, load_days, list_untagged, oi_before=oi_before)
     return _FOOTPRINT_HISTORY
 
 
@@ -560,7 +568,7 @@ class ServerMarketGateway:
             closed_before = sum(fp.candle_delta(t) for t in before)    # an engine running overnight: earlier days
             payload = chart_payload(fp, engine.cvd_tracker.cvd - closed_before, engine.last_candle_seen, ppr,
                                     interval_sec=interval_sec, limit=None, since=since, until=until,
-                                    native_sec=config.CANDLE_INTERVAL_SEC)
+                                    native_sec=config.CANDLE_INTERVAL_SEC, oi_before=STATE.get("oi_before"))
             return {"date": day, "symbol": symbol, "state": "live", "interval_sec": interval_sec,
                     "row_size": payload["row_size"], "cvd_start": payload["cvd_offset"], "bars": payload["bars"]}
         if day >= live:
@@ -590,7 +598,15 @@ class ServerMarketGateway:
         if not records:
             raise ValueError(f"no trades recorded on {date}")
         contract = STATE.get("contract")
-        return ReplaySession(date, records, contract["tick_size"] if contract else 0.1)
+        session = ReplaySession(date, records, contract["tick_size"] if contract else 0.1)
+        db, symbol = STATE.get("db_engine"), records[0].get("symbol")
+        if db is not None and symbol:
+            try:
+                session.oi_before = await last_open_interest_before(db, "angelone", symbol,
+                                                                    date_cls.fromisoformat(date))
+            except Exception as e:                       # the dOI baseline is optional
+                log.warning("replay OI baseline unavailable for %s: %r", date, e)
+        return session
 
     def replay_snapshot(self, session: ReplaySession, ppr: int, interval_sec: int) -> dict:
         state = session.state
@@ -605,9 +621,10 @@ class ServerMarketGateway:
                        "tick_size": session.tick_size, "lot_size": contract.get("lotsize", 65)},
             "book": _book_payload(state.book),
             "quote": {"ltp": last["ltp"], "open": None, "high": None, "low": None, "close": None,
-                      "volume": last.get("cum_volume") or 0, "oi": None} if last else None,
+                      "volume": last.get("cum_volume") or 0, "oi": last.get("oi")} if last else None,
             "chart": _chart_payload(state.footprint, state.cvd_tracker.cvd, state.last_candle_seen, ppr,
-                                    interval_sec=_clamp_chart_interval(interval_sec)),
+                                    interval_sec=_clamp_chart_interval(interval_sec),
+                                    oi_before=getattr(session, "oi_before", None)),
             "replay": session.meta(),
         }
 

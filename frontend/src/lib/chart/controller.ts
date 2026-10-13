@@ -16,14 +16,18 @@ import { bandRange, hasOhlc, toCandle, toFootprintBar } from "../adapter";
 import { istTime } from "../format";
 import type { ChartSnapshot, EngineBar } from "../types";
 import { type FootprintSession, sessionStarts } from "./footprintSessions";
+import { FootprintTable, rowValue, TABLE_ROW_LABELS, cellTexts, type TableRow } from "./footprintTable";
 import { SessionMarks } from "./sessionMarks";
 
 export const COLORS = {
   bg: "#12151b", grid: "#181c23", border: "#252b35", text: "#a3acba",
-  buy: "#1fb58f", sell: "#e5485d", poc: "#dfe4ec", va: "#5d6b80", cell: "#eef3fa",
+  buy: "#1fb58f", sell: "#e5485d", poc: "#ff5fa8", va: "#5d6b80", cell: "#eef3fa",   // POC = VPOC: pink
 };
 const TRANSPARENT = "rgba(0,0,0,0)";
 const MIN_COLUMN_PX = 125;
+const CARD_ROWS = ["volume", "delta", "deltaPct"] as const;   // the per-candle card, when the table is off
+const CARD_MARGIN = 0.24;                                       // price-scale bottom margin the card needs
+const TIME_AXIS_PX = 28;
 /** Ask for an earlier session when fewer than this many columns are left of the view. */
 export const LOAD_MORE_COLUMNS = 20;
 
@@ -62,6 +66,8 @@ export class FootprintController {
   private readonly footprint: Footprint;       // the newest session's layer; drives autoscale
   private readonly layers = new Map<string, Footprint>();   // earlier sessions, by date
   private readonly marks = new SessionMarks();
+  private readonly table = new FootprintTable();
+  private height: number;
   private readonly series: Series;
   private readonly newFootprint: () => Footprint;
   private multi = false;
@@ -116,19 +122,30 @@ export class FootprintController {
     this.footprint = this.newFootprint();
     this.chart.addPrimitive(this.footprint);
     this.chart.addPrimitive(this.marks);
+    this.chart.addPrimitive(this.table);
+    this.table.setOptions({ divisor: this.divisor() });
 
     // Autoscale on the columns in (or next to) view, not every loaded column.
     const loadedExtent = this.footprint.autoscaleInfo.bind(this.footprint);
     this.footprint.autoscaleInfo = () => this.visibleExtent() ?? loadedExtent();
 
-    this.chart.on("crosshair:move", (e) => this.renderTooltip(e.point ? this.hoverAt(e.point.x, e.point.y) : null, e.point));
+    this.chart.on("crosshair:move", (e) => {
+      const time = e.point ? this.table.hitTest(e.point.x, e.point.y) : null;
+      if (time !== null && e.point) this.renderTableTooltip(time, e.point);
+      else this.renderTooltip(e.point ? this.hoverAt(e.point.x, e.point.y) : null, e.point);
+    });
 
     // The library has no visible-range event: look after every gesture that can pan.
     const check = () => setTimeout(() => this.checkNearStart(), 0);
     for (const ev of ["wheel", "pointerup", "keyup"]) container.addEventListener(ev, check, { passive: true });
 
     this.width = container.clientWidth;
+    this.height = container.clientHeight;
     this.observer = new ResizeObserver(() => {
+      if (container.clientHeight !== this.height) {
+        this.height = container.clientHeight;
+        this.fitPriceArea();
+      }
       if (container.clientWidth !== this.width) {
         this.width = container.clientWidth;
         this.fitColumns();
@@ -168,6 +185,26 @@ export class FootprintController {
   setUnits(units: UnitOptions): void {
     this.units = units;
     for (const fp of this.allLayers()) fp.setOptions({ volumeDivisor: this.divisor() });
+    this.table.setOptions({ divisor: this.divisor() });
+  }
+
+  /** The footprint table: shown or not, and which rows. It replaces the per-candle card. */
+  setTable(visible: boolean, rows: readonly TableRow[]): void {
+    this.table.setOptions({ visible, rows });
+    for (const fp of this.allLayers()) fp.setOptions({ statsRows: this.cardRows() });
+    this.fitPriceArea();
+  }
+
+  private cardRows(): string[] {
+    return this.table.height() ? [] : [...CARD_ROWS];
+  }
+
+  /** Keep candles above the table: the price scale's bottom margin is the table's height. */
+  private fitPriceArea(): void {
+    const plot = Math.max(1, this.container.clientHeight - TIME_AXIS_PX);
+    const h = this.table.height();
+    const marginBottom = h ? Math.min(0.45, (h + 14) / plot) : CARD_MARGIN;
+    this.chart.setPriceScaleOptions({ marginBottom });
   }
 
   /** Refit the columns on the next snapshot (e.g. after an interval or row-size change). */
@@ -212,6 +249,7 @@ export class FootprintController {
     this.bars = [];
     this.dateOf = new Map();
     const candles = [];
+    this.table.setBars(usable.flatMap((g) => g.bars));
     for (const g of usable) {
       const fpBars = g.bars.map((b) => toFootprintBar(b, rowSize));
       const fp = g === last ? this.footprint : this.layerFor(g.key);
@@ -255,7 +293,8 @@ export class FootprintController {
     let fp = this.layers.get(key);
     if (!fp) {
       fp = this.newFootprint();
-      fp.setOptions({ volumeDivisor: this.divisor(), ...FootprintController.displayOptions(this.display) });
+      fp.setOptions({ volumeDivisor: this.divisor(), statsRows: this.cardRows(),
+                      ...FootprintController.displayOptions(this.display) });
       fp.autoscaleInfo = () => null;              // the primary layer scales on every visible column
       this.chart.addPrimitive(fp);
       this.layers.set(key, fp);
@@ -310,6 +349,14 @@ export class FootprintController {
     return Number.isFinite(min) ? { min, max } : null;
   }
 
+  private renderTableTooltip(time: number, point: { x: number; y: number }): void {
+    const b = this.table.bar(time);
+    if (!b) return;
+    const rows = (Object.keys(TABLE_ROW_LABELS) as TableRow[]).map((r) =>
+      [TABLE_ROW_LABELS[r], cellTexts(r, rowValue(r, b), this.divisor())[0]] as [string, string]);
+    this.showTooltip(time, rows, point);
+  }
+
   private renderTooltip(hit: FootprintHover | null, point?: { x: number; y: number }): void {
     const tip = this.tooltip;
     if (!hit || !point) {
@@ -331,11 +378,16 @@ export class FootprintController {
       ["Min / max Δ", hit.stats.minDelta === null ? "—" : `${sq(hit.stats.minDelta)} / ${sq(hit.stats.maxDelta ?? 0)}`],
       ["Trades", hit.stats.trades == null ? "—" : String(hit.stats.trades)]);
 
+    this.showTooltip(hit.time, rows, point);
+  }
+
+  private showTooltip(time: number, rows: [string, string][], point: { x: number; y: number }): void {
+    const tip = this.tooltip;
     // DOM nodes and textContent only: no HTML strings.
     const title = document.createElement("div");
     title.className = "mb-1 text-fg-2";
-    const date = this.dateOf.get(hit.time);
-    title.textContent = `${date ? `${date} ` : ""}${istTime(hit.time)} IST · ${this.units.units === "lots" ? `lots (${this.units.lotSize}/lot)` : "quantity"}`;
+    const date = this.dateOf.get(time);
+    title.textContent = `${date ? `${date} ` : ""}${istTime(time)} IST · ${this.units.units === "lots" ? `lots (${this.units.lotSize}/lot)` : "quantity"}`;
     const body = rows.map(([k, v]) => {
       const row = document.createElement("div");
       row.className = "flex justify-between gap-4";

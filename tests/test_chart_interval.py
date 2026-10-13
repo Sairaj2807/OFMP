@@ -61,8 +61,11 @@ def test_grouped_payload_equals_grouping_the_native_payload_directly(engine):
     for interval in ALL_INTERVALS[1:]:
         payload = server._chart_payload(engine.footprint, engine.cvd_tracker.cvd, engine.last_candle_seen,
                                         1, interval_sec=interval, limit=BIG)
-        expected_bars = oe.group_native_bars(native["bars"], interval, config.CANDLE_INTERVAL_SEC)
-        assert payload["bars"] == expected_bars
+        # footprint-table fields are computed per display bar after grouping (tests/test_footprint_table.py)
+        table = {"volume", "cot", "vpoc", "vpoc_volume", "oi", "doi"}
+        strip = lambda bars: [{k: v for k, v in b.items() if k not in table} for b in bars]   # noqa: E731
+        expected_bars = oe.group_native_bars(strip(native["bars"]), interval, config.CANDLE_INTERVAL_SEC)
+        assert strip(payload["bars"]) == expected_bars
         assert payload["interval_sec"] == interval
         assert payload["cvd_offset"] == native["cvd_offset"]   # unaffected by display grouping
 

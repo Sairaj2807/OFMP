@@ -41,6 +41,13 @@ export interface EngineBar {
   max_delta?: number | null;
   trades?: number | null;
   cells: { price: number; buy: number; sell: number }[];
+  // footprint table (server-computed; absent from servers before 2026-10-13)
+  volume?: number;
+  cot?: number | null;            // buy - sell
+  vpoc?: number | null;           // band floor of the highest-volume row (tie: the higher price)
+  vpoc_volume?: number | null;
+  oi?: number | null;             // closing open interest
+  doi?: number | null;            // vs the previous candle (the session's first: the previous close)
 }
 
 export type BookLevel = [price: number, qty: number, orders: number];

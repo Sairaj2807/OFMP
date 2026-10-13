@@ -33,6 +33,7 @@ def build_observation(ev: TradeEvent) -> dict:
         "ltp": price,
         "qty": ev.qty,
         "cum_volume": tick["cum_volume"],
+        "oi": tick.get("oi"),
 
         "best_bid": best_bid,
         "best_ask": best_ask,

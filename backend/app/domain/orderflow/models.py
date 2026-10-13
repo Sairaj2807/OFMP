@@ -1,6 +1,6 @@
 """Value types shared across the order-flow engine."""
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Optional
 
 TradeSide = Literal["BUY", "SELL"]
 
@@ -11,6 +11,7 @@ class Trade:
     price: float
     quantity: int
     side: str                # "BUY" | "SELL"
+    open_interest: Optional[int] = None   # OI on the tick that produced the trade (None: unknown)
 
 
 @dataclass

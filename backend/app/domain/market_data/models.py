@@ -63,6 +63,7 @@ class MarketTick:
             "ltp": self.ltp,
             "ltt": self.last_trade_ts_ms,
             "cum_volume": self.cumulative_volume,
+            "oi": self.open_interest,
             "depth_buy": [tuple(level) for level in self.bids],
             "depth_sell": [tuple(level) for level in self.asks],
         }

@@ -34,7 +34,7 @@ from .profile_history import _Lru
 log = logging.getLogger("ofmp.footprint_history")
 
 # Bump when the footprint/candle maths or the bar format changes.
-FOOTPRINT_VERSION = "footprint-v1"
+FOOTPRINT_VERSION = "footprint-v2"     # v2: table fields (volume, VPOC, COT, OI, dOI)
 # Days that may be shown before today, by display interval (owner decision 2026-10-12).
 DAY_CAPS = {60: 5, 180: 10}
 DEFAULT_DAY_CAP = 20
@@ -46,11 +46,14 @@ def day_cap(interval_sec: int) -> int:
 
 class FootprintHistory:
     def __init__(self, list_dates: Callable[..., Awaitable[list]], load_days: Callable[..., Awaitable[dict]],
-                 list_untagged: Callable[..., Awaitable[list]], max_states: int = 64, max_payloads: int = 512):
+                 list_untagged: Callable[..., Awaitable[list]], max_states: int = 64, max_payloads: int = 512,
+                 oi_before: Optional[Callable[..., Awaitable[Optional[int]]]] = None):
         """list_dates(symbol, before, limit, date_from) -> [date] oldest first;
-        load_days(symbol, [date]) -> {date: [(ts_ms, price, qty, side)]};
-        list_untagged(before, date_from) -> [date]."""
+        load_days(symbol, [date]) -> {date: [(ts_ms, price, qty, side[, oi])]};
+        list_untagged(before, date_from) -> [date];
+        oi_before(symbol, date) -> the previous session's closing OI (None: unknown)."""
         self._list_dates, self._load_days, self._list_untagged = list_dates, load_days, list_untagged
+        self._oi_before = oi_before
         self._states = _Lru(max_states)
         self._payloads = _Lru(max_payloads)
         self.stats = {"days_loaded": 0, "payload_hits": 0, "payload_builds": 0}
@@ -81,7 +84,9 @@ class FootprintHistory:
             if not trades:
                 return None
             state = TickProcessorState(tick_size)
-            restore_trades(state, [Trade(timestamp=ts, price=p, quantity=q, side=s) for ts, p, q, s in trades])
+            restore_trades(state, [Trade(timestamp=t[0], price=t[1], quantity=t[2], side=t[3],
+                                         open_interest=t[4] if len(t) > 4 else None) for t in trades])
+            state.oi_before = await self._oi_before(symbol, day) if self._oi_before else None
             self._states.put(key, state)
         return state
 
@@ -100,7 +105,7 @@ class FootprintHistory:
         # (its total delta) the payload's cvd_offset is the CVD before the first bar: 0, the session start
         fp = state.footprint
         payload = chart_payload(fp, sum(fp.candle_delta(t) for t in fp.data), None, ppr, interval_sec=interval_sec,
-                                limit=None, native_sec=NATIVE_CANDLE_SEC)
+                                limit=None, native_sec=NATIVE_CANDLE_SEC, oi_before=state.oi_before)
         out = {"date": day.isoformat(), "symbol": symbol, "version": FOOTPRINT_VERSION, "state": "historical",
                "interval_sec": interval_sec, "row_size": payload["row_size"], "cvd_start": payload["cvd_offset"],
                "bars": payload["bars"]}
