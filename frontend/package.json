@@ -15,7 +15,7 @@
     "next": "16.4.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "react-resizable-panels": "^4.14.1",
+    "react-resizable-panels": "^4.14.3",
     "zustand": "^5.0.15"
   },
   "devDependencies": {
