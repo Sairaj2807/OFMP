@@ -15,7 +15,7 @@ COPY deploy/nginx/csp-hashes.mjs ./
 COPY --from=frontend /build/out ./out
 RUN node csp-hashes.mjs csp.conf $(find out -name '*.html')
 
-FROM nginx:1.30-alpine
+FROM nginx:1.31-alpine
 # OS security fixes released after the base image was built
 RUN apk upgrade --no-cache && rm /etc/nginx/conf.d/default.conf
 COPY deploy/nginx/nginx.conf /etc/nginx/nginx.conf
