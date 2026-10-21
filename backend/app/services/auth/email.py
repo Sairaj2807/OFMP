@@ -23,6 +23,15 @@ class LogEmailSender:
         log.info("[dev email] to=%s subject=%s\n%s", to, subject, body)
 
 
+class DisabledEmailSender:
+    """Production without an email provider (EMAIL_PROVIDER=none): nothing is sent, and only
+    the recipient and subject are logged, never the body (it carries one-time links). Use it
+    with ALLOW_REGISTRATION=0; accounts are created with `python -m backend.app.cli create-user`."""
+
+    async def send(self, to: str, subject: str, body: str) -> None:
+        log.warning("email not sent (EMAIL_PROVIDER=none): to=%s subject=%s", to, subject)
+
+
 class MemoryEmailSender:
     """Tests: collects messages in `outbox`."""
 

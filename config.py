@@ -73,6 +73,9 @@ BROADCAST_INTERVAL_SEC = 0.5
 
 # Writable runtime files; in containers these point into the data volume.
 TOKENS_FILE = os.environ.get("TOKENS_FILE", "angel_tokens.txt")
+# Outbound email: "log" (development: written to the log) or "none" (production without a provider:
+# nothing is sent, no link is logged). No real provider is integrated yet.
+EMAIL_PROVIDER = os.environ.get("EMAIL_PROVIDER", "log")
 INSTRUMENTS_CACHE_FILE = os.environ.get("INSTRUMENTS_CACHE_FILE", "instruments_cache.json")
 
 # ---------------------------------------------------------------------------

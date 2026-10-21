@@ -77,7 +77,7 @@ Check:
 - `curl -I https://charts.example.com/ready` returns 200.
 - The terminal is at `https://charts.example.com/app/`.
 
-The production default is `ALLOW_REGISTRATION=0` (accounts are created by admins). Every page and API
+The production default is `ALLOW_REGISTRATION=0` (accounts are created by admins). No email provider is integrated yet: set `EMAIL_PROVIDER=none` (emails are dropped; only the recipient and subject are logged, never a link). Production refuses the development log sender. Every page and API
 requires login.
 
 ### Existing data
@@ -115,6 +115,19 @@ docker compose -f docker-compose.prod.yml --env-file .env.production up -d --no-
 | Application | `git checkout <previous tag>`, then `make build` and `up -d --no-deps api worker nginx`. Tag images per release (`OFMP_VERSION`) to switch back without rebuilding. |
 | Database | Migrations have downgrades (`python -m alembic downgrade <rev>`). If a migration changed data, restore the pre-deploy backup instead (see `docs/disaster-recovery.md`). |
 | Frontend | Ships inside the nginx image; roll back with the image. |
+
+## Single VPS with the Angel connection in the API
+
+`deploy/docker-compose.embedded.yml` runs the broker connection inside the API (`INGEST_MODE=embedded`), so the
+daily broker session (`docs/broker-session.md`) works; the worker is not started:
+
+```bash
+docker compose -f docker-compose.prod.yml -f deploy/docker-compose.embedded.yml --env-file .env.production up -d
+```
+
+Without a domain, use a self-signed certificate for the server's IP (browsers warn once):
+`openssl req -x509 -nodes -newkey rsa:2048 -days 825 -keyout deploy/certs/privkey.pem -out deploy/certs/fullchain.pem
+-subj "/CN=<ip>" -addext "subjectAltName=IP:<ip>"`, with `PUBLIC_BASE_URL=https://<ip>`.
 
 ## Environments
 

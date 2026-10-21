@@ -384,3 +384,14 @@ def test_websocket_with_a_real_session(env):
         with pytest.raises(WebSocketDisconnect) as e:
             ws.receive_json()
         assert e.value.code == 4401
+
+
+def test_disabled_email_sender_never_logs_the_link(caplog):
+    from backend.app.services.auth.email import DisabledEmailSender, LogEmailSender
+    with pytest.raises(RuntimeError):
+        LogEmailSender("production")                                   # the dev sender still refuses production
+    with caplog.at_level("WARNING"):
+        run(DisabledEmailSender().send("a@example.com", "Reset your password",
+                                       "https://x/reset?token=SECRET-ONE-TIME-TOKEN"))
+    assert "a@example.com" in caplog.text and "Reset your password" in caplog.text
+    assert "SECRET-ONE-TIME-TOKEN" not in caplog.text

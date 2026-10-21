@@ -43,6 +43,7 @@ from backend.app.infrastructure.postgres.repositories import (last_open_interest
 from backend.app.services.footprint_history import FootprintHistory, day_cap
 from backend.app.services.profile_history import ProfileHistory
 from backend.app.domain.profile.levels import LOOKBACK_SESSIONS, composite_profile, naked_pocs
+from backend.app.services.auth.email import DisabledEmailSender
 from backend.app.services.broker_session import BrokerSession, SessionTimes
 from backend.app.services.replay import ReplayLibrary, ReplaySession
 from backend.app.infrastructure.postgres.rows import IST, ist_date
@@ -401,7 +402,8 @@ async def startup():
         app, db_engine=STATE["db_engine"], jwt_secret=config.JWT_SECRET, public_base_url=config.PUBLIC_BASE_URL,
         access_ttl_sec=config.ACCESS_TOKEN_TTL_SEC, refresh_ttl_sec=config.REFRESH_TOKEN_TTL_SEC,
         allow_registration=config.ALLOW_REGISTRATION, gateway=ServerMarketGateway(),
-        allowed_intervals=config.ALLOWED_CHART_INTERVALS_SEC, redis=STATE.get("limiter_redis"))
+        allowed_intervals=config.ALLOWED_CHART_INTERVALS_SEC, redis=STATE.get("limiter_redis"),
+        email_sender=DisabledEmailSender() if config.EMAIL_PROVIDER == "none" else None)
     if app.state.auth_service is None:
         print("[server] /api/v1 auth disabled: needs DATABASE_URL and JWT_SECRET")
 
