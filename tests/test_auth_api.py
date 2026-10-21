@@ -386,12 +386,13 @@ def test_websocket_with_a_real_session(env):
         assert e.value.code == 4401
 
 
-def test_disabled_email_sender_never_logs_the_link(caplog):
-    from backend.app.services.auth.email import DisabledEmailSender, LogEmailSender
+def test_disabled_email_sender_never_logs_the_link(monkeypatch):
+    from backend.app.services.auth import email
     with pytest.raises(RuntimeError):
-        LogEmailSender("production")                                   # the dev sender still refuses production
-    with caplog.at_level("WARNING"):
-        run(DisabledEmailSender().send("a@example.com", "Reset your password",
-                                       "https://x/reset?token=SECRET-ONE-TIME-TOKEN"))
-    assert "a@example.com" in caplog.text and "Reset your password" in caplog.text
-    assert "SECRET-ONE-TIME-TOKEN" not in caplog.text
+        email.LogEmailSender("production")                             # the dev sender still refuses production
+    logged = []
+    monkeypatch.setattr(email.log, "warning", lambda msg, *args: logged.append(msg % args))
+    run(email.DisabledEmailSender().send("a@example.com", "Reset your password",
+                                         "https://x/reset?token=SECRET-ONE-TIME-TOKEN"))
+    assert len(logged) == 1 and "a@example.com" in logged[0] and "Reset your password" in logged[0]
+    assert "SECRET-ONE-TIME-TOKEN" not in logged[0]
