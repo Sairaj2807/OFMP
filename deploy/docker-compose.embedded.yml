@@ -1,0 +1,13 @@
+# Single-VPS override: the API process holds the Angel One connection (INGEST_MODE=embedded),
+# so the daily broker session runs (login before each NSE session, feed off after the close; see
+# docs/broker-session.md). No ingest worker. Use with the production file:
+#
+#   docker compose -f docker-compose.prod.yml -f deploy/docker-compose.embedded.yml --env-file .env.production up -d
+services:
+  api:
+    environment:
+      INGEST_MODE: embedded
+    networks: [data, edge, monitoring, egress]     # egress: outbound to Angel One
+
+  worker:
+    profiles: ["worker"]                           # not started in this mode
