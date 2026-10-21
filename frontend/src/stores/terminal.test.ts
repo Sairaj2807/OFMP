@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { PROFILE_LEVELS as PROFILE_LEVELS_ALL } from "@/lib/chart/profileLevels";
 import { SnapshotBus } from "@/lib/snapshots";
 import { STORAGE_KEY, STORAGE_VERSION, initialTerminal, useTerminal, visibleCharts } from "./terminal";
 
@@ -77,6 +78,9 @@ describe("config migration", () => {
     expect(v6.charts.map((c) => [c.profileZoomY, c.profileZoomX])).toEqual([[12, 1.5], [0, 0], [0, 0], [0, 0]]);
     const v7 = migrateConfig({ charts: [{ id: "c1", footprintDays: 10 }, { id: "c2", footprintDays: 3 }] });
     expect(v7.charts.map((c) => c.footprintDays)).toEqual([10, 0, 0, 0]);
+    const v9 = migrateConfig({ charts: [{ id: "c1", profileLevels: ["hvn", "nope", "vva"] }] });
+    expect(v9.charts.map((c) => c.profileLevels)).toEqual([["vva", "hvn"], [...PROFILE_LEVELS_ALL], [...PROFILE_LEVELS_ALL],
+                                                           [...PROFILE_LEVELS_ALL]]);
     const v8 = migrateConfig({ charts: [{ id: "c1", showTable: false, tableRows: ["oi", "bogus", "volume"] }, { id: "c2" }] });
     expect(v8.charts.map((c) => [c.showTable, c.tableRows])).toEqual([
       [false, ["volume", "oi"]], [true, ["volume", "vpoc", "vpocVol", "cot", "oi", "doi"]],

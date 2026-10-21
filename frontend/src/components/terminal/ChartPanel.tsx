@@ -8,10 +8,12 @@ import { Button, Select } from "@/components/ui/controls";
 import { type ChartStats, useLiveStats } from "@/hooks/useLiveStream";
 import { dayCap } from "@/lib/chart/footprintSessions";
 import { TABLE_ROW_LABELS } from "@/lib/chart/footprintTable";
+import { PROFILE_LEVEL_LABELS } from "@/lib/chart/profileLevels";
 import { intervalLabel } from "@/lib/format";
 import { useSession } from "@/stores/session";
 import {
-  type CellStyle, type ChartConfig, type DisplayMode, FOOTPRINT_DAYS, PROFILE_DAYS, PROFILE_ROWS, TABLE_ROWS, useTerminal,
+  type CellStyle, type ChartConfig, type DisplayMode, FOOTPRINT_DAYS, PROFILE_DAYS, PROFILE_LEVELS, PROFILE_ROWS, TABLE_ROWS,
+  useTerminal,
 } from "@/stores/terminal";
 import { ReplayBar, loadReplaySessions } from "./ReplayBar";
 
@@ -71,7 +73,11 @@ export function ChartPanel({ config }: { config: ChartConfig }) {
             <Button active={config.showPoc} onClick={() => update(config.id, { showPoc: !config.showPoc })}
                     title="TPO and volume points of control">POC</Button>
             <Button active={config.showValueArea} onClick={() => update(config.id, { showValueArea: !config.showValueArea })}
-                    title="Value area (70% of TPOs)">VA</Button>
+                    title="Value area shading (70%)">VA</Button>
+            <span className="px-1 text-[11px] text-muted">Levels</span>
+            <CheckMenu label="Profile levels" title="Levels drawn on each profile" options={PROFILE_LEVELS}
+                       labels={PROFILE_LEVEL_LABELS} selected={config.profileLevels} width="w-72"
+                       onChange={(profileLevels) => update(config.id, { profileLevels })} />
           </>
         ) : (
           <>
@@ -114,7 +120,8 @@ export function ChartPanel({ config }: { config: ChartConfig }) {
             <span className="mx-1 h-4 w-px bg-line" aria-hidden />
             <Button active={config.showTable} onClick={() => update(config.id, { showTable: !config.showTable })}
                     title="Table under the candles: Volume, VPOC, VPOC Vol, COT (buy − sell), OI, dOI">Table</Button>
-            <TableRowsMenu config={config} onChange={(tableRows) => update(config.id, { tableRows, showTable: true })} />
+            <CheckMenu label="Table rows" title="Choose the table's rows" options={TABLE_ROWS} labels={TABLE_ROW_LABELS}
+                       selected={config.tableRows} onChange={(tableRows) => update(config.id, { tableRows, showTable: true })} />
           </>
         )}
       </div>
@@ -129,9 +136,12 @@ export function ChartPanel({ config }: { config: ChartConfig }) {
   );
 }
 
-/** Which footprint-table rows to show (saved per chart). A fixed-position popup: the toolbar scrolls
- *  horizontally, which would clip an absolutely positioned one. */
-function TableRowsMenu({ config, onChange }: { config: ChartConfig; onChange: (rows: ChartConfig["tableRows"]) => void }) {
+/** A checkbox list in a fixed-position popup (the toolbar scrolls horizontally, which would clip an absolutely
+ *  positioned one): footprint-table rows, market-profile levels. Choices are saved per chart. */
+function CheckMenu<T extends string>({ label, title, options, labels, selected, onChange, width = "w-36" }: {
+  label: string; title: string; options: readonly T[]; labels: Record<T, string>; selected: readonly T[];
+  onChange: (next: T[]) => void; width?: string;
+}) {
   const [at, setAt] = useState<{ top: number; right: number } | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const popupRef = useRef<HTMLFieldSetElement>(null);
@@ -157,18 +167,18 @@ function TableRowsMenu({ config, onChange }: { config: ChartConfig; onChange: (r
   };
   return (
     <>
-      <button ref={buttonRef} type="button" aria-label="Table rows" aria-expanded={!!at} aria-haspopup="true"
-              onClick={toggle} title="Choose the table's rows"
+      <button ref={buttonRef} type="button" aria-label={label} aria-expanded={!!at} aria-haspopup="true"
+              onClick={toggle} title={title}
               className="h-6 rounded px-1.5 text-[12px] text-fg-2 transition-colors hover:bg-raised hover:text-fg">▾</button>
       {at && (
         <fieldset ref={popupRef} style={{ top: at.top, right: at.right }}
-                  className="fixed z-50 w-36 rounded border border-line-strong bg-raised p-2 text-[12px] shadow-lg">
-          <legend className="sr-only">Table rows</legend>
-          {TABLE_ROWS.map((row) => (
-            <label key={row} className="flex cursor-pointer items-center gap-2 py-0.5">
-              <input type="checkbox" checked={config.tableRows.includes(row)}
-                     onChange={(e) => onChange(TABLE_ROWS.filter((r) => (r === row ? e.target.checked : config.tableRows.includes(r))))} />
-              {TABLE_ROW_LABELS[row]}
+                  className={`fixed z-50 ${width} rounded border border-line-strong bg-raised p-2 text-[12px] shadow-lg`}>
+          <legend className="sr-only">{label}</legend>
+          {options.map((o) => (
+            <label key={o} className="flex cursor-pointer items-center gap-2 py-0.5">
+              <input type="checkbox" checked={selected.includes(o)}
+                     onChange={(e) => onChange(options.filter((r) => (r === o ? e.target.checked : selected.includes(r))))} />
+              {labels[o]}
             </label>
           ))}
         </fieldset>

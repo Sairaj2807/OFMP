@@ -20,9 +20,21 @@ All rules are explicit so results are repeatable (backtests, replay):
   single until the next period starts). A run that reaches the top or bottom
   row of the profile is a tail (selling tail at the top, buying tail at the
   bottom), reported separately; single prints are the interior runs.
-- HVN / LVN (v1): rows that are the local volume maximum / minimum within two
-  rows either side, with volume at least 1.5x / at most 0.5x the mean row
-  volume; LVNs only strictly inside the range (not the first or last two rows).
+- HVN (v2, owner decision 2026-10-21: "volumes almost similar to VPOC"): a
+  run of adjacent rows each with at least 70% of the VPOC row's volume that
+  does not contain the VPOC row; reported as a band and its peak row.
+- LVN (v1): rows that are the local volume minimum within two rows either side,
+  with at most 0.5x the mean row volume, strictly inside the range (not the
+  first or last two rows).
+- VWAP: sum(price x qty) / sum(qty) over the session's trades, exact (volume is
+  kept per tick). TWAP: the TPO median, the row where the TPOs at or below it
+  first reach half of all TPOs (time spent above and below is equal).
+- IB extensions: IBH + 0.5 / 1 / 2 x the IB range (1.5x / 2x / 3x) and the same
+  below IBL, once the IB is final; `reached` is the largest multiple traded.
+- Developing POC: the volume POC of the session up to the end of each period
+  (the POC tie rule); the last entry is the current DPOC.
+- Weak high / low: the top / bottom row has two or more TPOs and no tail there
+  (flat edge, no rejection).
 """
 from typing import Optional
 
@@ -30,8 +42,9 @@ from .engine import SessionProfile, letter
 
 VALUE_AREA_PCT = 0.70
 NODE_WINDOW = 2
-HVN_FACTOR = 1.5
+HVN_PCT_OF_POC = 0.70
 LVN_FACTOR = 0.5
+IB_MULTIPLES = (1.5, 2.0, 3.0)
 
 
 def _round(x: float) -> float:
@@ -87,21 +100,59 @@ def single_print_runs(rows: list, in_progress: Optional[int]) -> list:
     return runs
 
 
-def volume_nodes(volumes: list) -> tuple:
-    """(HVN indexes, LVN indexes) per the v1 rule above."""
+def hvn_bands(volumes: list, poc: Optional[int], pct: float = HVN_PCT_OF_POC) -> list:
+    """[(low index, high index, peak index)] per the v2 rule above."""
+    if poc is None or volumes[poc] <= 0:
+        return []
+    floor = volumes[poc] * pct
+    bands, start = [], None
+    for i, v in enumerate(volumes + [-1]):                     # sentinel closes the last run
+        if v >= floor and v > 0:
+            start = i if start is None else start
+            continue
+        if start is not None:
+            lo, hi = start, i - 1
+            if not lo <= poc <= hi:
+                peak = max(range(lo, hi + 1), key=lambda k: (volumes[k], -k))
+                bands.append((lo, hi, peak))
+            start = None
+    return bands
+
+
+def low_volume_nodes(volumes: list) -> list:
+    """LVN indexes per the v1 rule above."""
     traded = [v for v in volumes if v > 0]
     if len(volumes) < 2 * NODE_WINDOW + 1 or not traded:
-        return [], []
+        return []
     mean = sum(traded) / len(traded)
-    hvn, lvn = [], []
-    for i, v in enumerate(volumes):
-        window = volumes[max(0, i - NODE_WINDOW): i + NODE_WINDOW + 1]
-        if v == max(window) and v >= HVN_FACTOR * mean and v > 0:
-            hvn.append(i)
-        inside = NODE_WINDOW <= i < len(volumes) - NODE_WINDOW
-        if inside and v == min(window) and v <= LVN_FACTOR * mean:
-            lvn.append(i)
-    return hvn, lvn
+    return [i for i, v in enumerate(volumes)
+            if NODE_WINDOW <= i < len(volumes) - NODE_WINDOW
+            and v == min(volumes[i - NODE_WINDOW: i + NODE_WINDOW + 1]) and v <= LVN_FACTOR * mean]
+
+
+def tpo_median(tpo: list) -> Optional[int]:
+    """Index of the row where the cumulative TPOs from the bottom first reach half of the total."""
+    total = sum(tpo)
+    if total <= 0:
+        return None
+    run = 0
+    for i, t in enumerate(tpo):
+        run += t
+        if run * 2 >= total:
+            return i
+    return len(tpo) - 1
+
+
+def developing_poc(profile: SessionProfile, row: int, lo_row: int, n: int) -> list:
+    """[(period, row index of the volume POC up to the end of that period)]."""
+    cum, out = [0] * n, []
+    for period in sorted(profile.period_volume):
+        for t, q in profile.period_volume[period].items():
+            cum[t // row - lo_row] += q
+        idx = poc_index(cum)
+        if idx is not None:
+            out.append((period, idx))
+    return out
 
 
 def _levels(profile: SessionProfile, row_points: float) -> Optional[dict]:
@@ -109,10 +160,12 @@ def _levels(profile: SessionProfile, row_points: float) -> Optional[dict]:
     full = build_profile(profile, row_points, include_previous=False)
     if full is None:
         return None
+    va_v = full["value_area_volume"]
     return {"date": full["date"], "poc_tpo": full["poc_tpo"], "poc_volume": full["poc_volume"],
             "vah": full["value_area_tpo"]["high"] if full["value_area_tpo"] else None,
             "val": full["value_area_tpo"]["low"] if full["value_area_tpo"] else None,
-            "high": full["stats"]["high"], "low": full["stats"]["low"]}
+            "vah_volume": va_v["high"] if va_v else None, "val_volume": va_v["low"] if va_v else None,
+            "vwap": full["vwap"], "high": full["stats"]["high"], "low": full["stats"]["low"]}
 
 
 def build_profile(profile: SessionProfile, row_points: float = 5.0, va_pct: float = VALUE_AREA_PCT,
@@ -144,8 +197,12 @@ def build_profile(profile: SessionProfile, row_points: float = 5.0, va_pct: floa
 
     p_tpo, p_vol = poc_index(tpo), poc_index(vol)
     va_t, va_v = value_area(tpo, p_tpo, va_pct), value_area(vol, p_vol, va_pct)
-    hvn, lvn = volume_nodes(vol)
+    bands, lvn = hvn_bands(vol, p_vol), low_volume_nodes(vol)
     runs = single_print_runs(rows, in_progress)
+    p_twap = tpo_median(tpo)
+    traded = sum(vol)
+    vwap = _round(sum(t * ts * (b + s) for t, (b, s) in profile.volume.items()) / traded) if traded else None
+    trail = developing_poc(profile, row, lo_row, n)
 
     session = profile.session
     ib = [profile.periods[i] for i in range(session.ib_periods) if i in profile.periods]
@@ -153,6 +210,16 @@ def build_profile(profile: SessionProfile, row_points: float = 5.0, va_pct: floa
     ib_low = _round(min(p.low for p in ib) * ts) if ib else None
     ib_final = bool(ib) and in_progress is not None and in_progress >= session.ib_periods
     high, low = _round(profile.high_tick * ts), _round(profile.low_tick * ts)
+    extensions = None
+    if ib_final and ib_high > ib_low:
+        rng = ib_high - ib_low
+        up = [{"multiple": m, "price": _round(ib_high + (m - 1) * rng)} for m in IB_MULTIPLES]
+        down = [{"multiple": m, "price": _round(ib_low - (m - 1) * rng)} for m in IB_MULTIPLES]
+        extensions = {"up": up, "down": down,
+                      "reached_up": max((e["multiple"] for e in up if high >= e["price"]), default=None),
+                      "reached_down": max((e["multiple"] for e in down if low <= e["price"]), default=None)}
+    tail_top = any(r["hi"] == n - 1 for r in runs if r["lo"] == 0 or r["hi"] == n - 1)
+    tail_bottom = any(r["lo"] == 0 for r in runs if r["lo"] == 0 or r["hi"] == n - 1)
 
     result = {
         "date": profile.date,
@@ -183,8 +250,16 @@ def build_profile(profile: SessionProfile, row_points: float = 5.0, va_pct: floa
         "tails": [{"low": price[r["lo"]], "high": price[r["hi"]], "letter": letter(r["period"]),
                    "kind": "selling" if r["hi"] == n - 1 else "buying"}
                   for r in runs if r["lo"] == 0 or r["hi"] == n - 1],
-        "hvn": [price[i] for i in hvn],
+        "hvn": [price[peak] for _lo, _hi, peak in bands],
+        "hvn_bands": [{"low": price[lo], "high": price[hi], "peak": price[peak]} for lo, hi, peak in bands],
         "lvn": [price[i] for i in lvn],
+        "vwap": vwap,
+        "twap": price[p_twap] if p_twap is not None else None,
+        "ib_extensions": extensions,
+        "dpoc": {"price": price[trail[-1][1]] if trail else None,
+                 "trail": [{"period": k, "letter": letter(k), "price": price[i]} for k, i in trail]},
+        "weak_high": n > 1 and tpo[n - 1] >= 2 and not tail_top,
+        "weak_low": n > 1 and tpo[0] >= 2 and not tail_bottom,
         "stats": {
             "open": _round(profile.open_tick * ts), "high": high, "low": low,
             "close": _round(profile.close_tick * ts),

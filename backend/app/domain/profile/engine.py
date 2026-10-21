@@ -15,8 +15,9 @@ Definitions (v1, owner decisions 2026-10-01):
   not part of the profile.
 
 Storage per session is tiny: each period keeps its (low, high) tick range, and
-volume is kept per tick (buy / sell). TPO rows for any row size are derived
-when a snapshot is built (see analytics.build_profile).
+volume is kept per tick (buy / sell) and per period and tick (for the developing
+POC). TPO rows for any row size are derived when a snapshot is built (see
+analytics.build_profile).
 """
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
@@ -92,6 +93,7 @@ class SessionProfile:
     last_ts_ms: Optional[int] = None
     trades: int = 0
     previous: Optional["SessionProfile"] = None       # the session before this one (reference levels)
+    period_volume: dict = field(default_factory=dict) # period index -> {tick: qty} (developing POC)
 
     def tick(self, price: float) -> int:
         return int(round(price / self.tick_size))
@@ -116,6 +118,8 @@ class SessionProfile:
             p.low, p.high, p.close = min(p.low, t), max(p.high, t), t
         v = self.volume.setdefault(t, [0, 0])
         v[0 if side == "BUY" else 1] += qty
+        pv = self.period_volume.setdefault(period, {})
+        pv[t] = pv.get(t, 0) + qty
         if self.open_tick is None:
             self.open_tick = t
         self.close_tick = t
@@ -126,9 +130,10 @@ class SessionProfile:
     def _roll(self, day: str) -> None:
         """A new session started: keep the finished one as `previous`."""
         finished = SessionProfile(self.tick_size, self.session, self.date, self.periods, self.volume,
-                                  self.open_tick, self.close_tick, self.last_ts_ms, self.trades)
+                                  self.open_tick, self.close_tick, self.last_ts_ms, self.trades,
+                                  period_volume=self.period_volume)
         self.previous = finished
-        self.date, self.periods, self.volume = day, {}, {}
+        self.date, self.periods, self.volume, self.period_volume = day, {}, {}, {}
         self.open_tick = self.close_tick = self.last_ts_ms = None
         self.trades = 0
 

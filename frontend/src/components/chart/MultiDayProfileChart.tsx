@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { periodColor } from "@/lib/chart/profileLayout";
+import { LEVEL_COLORS, levelsOnRow, type LevelLine, type ProfileLevel, profileDrawing } from "@/lib/chart/profileLevels";
 import {
   clampViewport, collectColumns, computeLayout, type DayColumn, fitZoom, followView, labelStep, mapper as makeMapper,
   type Mapper, type MultiLayout, panBy, type PriceGrid, priceGrid, rowAt, shortDate, type Viewport, visibleSpan,
@@ -26,9 +27,9 @@ import { type ChartConfig, type Units, useTerminal } from "@/stores/terminal";
 
 const C = {
   bg: "#12151b", axis: "#252b35", text: "#a3acba", strong: "#dfe4ec", muted: "#6f7888",
-  buy: "#1fb58f", sell: "#e5485d", va: "rgba(76,141,255,0.10)", poc: "#e0a43a", vpoc: "#dfe4ec",
-  ib: "#4c8dff", single: "#e0a43a", hvn: "#1fb58f", lvn: "#e5485d", live: "#4c8dff", liveBg: "rgba(76,141,255,0.05)",
-  prev: "#8a93a3", warn: "#e0a43a",
+  buy: "#1fb58f", sell: "#e5485d",
+  ib: "#4c8dff", single: "#e0a43a", lvn: "#e5485d", live: "#4c8dff", liveBg: "rgba(76,141,255,0.05)",
+  warn: "#e0a43a",       // level colours: lib/chart/profileLevels.ts
 };
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
@@ -67,12 +68,13 @@ export function MultiDayProfileChart({ config, units, lotSize }: Props) {
   const zoomSaveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settingsRef = useRef({ showPoc: config.showPoc, showValueArea: config.showValueArea, mode: config.profileMode,
                                units, lotSize, rowSize: config.profileRow, zoomY: config.profileZoomY,
-                               zoomX: config.profileZoomX });
+                               zoomX: config.profileZoomX, levels: config.profileLevels as readonly ProfileLevel[] });
   const [focus, setFocus] = useState<Focus | null>(null);
   const [following, setFollowing] = useState(true);
   const { id } = config;
   const update = useTerminal((s) => s.updateChart);
   const multi = config.profileDays > 0 && config.mode === "live";
+  const levelsKey = config.profileLevels.join(",");
 
   const schedule = () => {
     if (frameRef.current) return;
@@ -151,7 +153,7 @@ export function MultiDayProfileChart({ config, units, lotSize }: Props) {
     ctx.beginPath();
     ctx.rect(0, layout.plotTop, layout.axisX, layout.plotH + layout.footer);
     ctx.clip();
-    for (let i = first; i <= last; i++) drawSession(ctx, columns[i], i, m, layout, s, columns.length === 1);
+    for (let i = first; i <= last; i++) drawSession(ctx, columns[i], i, m, layout, s, columns.length === 1, grid.rowSize);
     ctx.restore();
     drawHeader(ctx, columns, first, last, m, layout);
     drawAxis(ctx, m, layout, grid, live.profile?.stats?.close ?? null);
@@ -219,8 +221,12 @@ export function MultiDayProfileChart({ config, units, lotSize }: Props) {
       }
       const d = settingsRef.current.units === "lots" ? settingsRef.current.lotSize : 1;
       tip.hidden = false;
+      const s = settingsRef.current;
+      const names = col.profile ? levelsOnRow(profileDrawing(col.profile, { enabled: s.levels, showPoc: s.showPoc,
+        showValueArea: s.showValueArea, previous: v.columns.length === 1 }), row.price, v.grid.rowSize) : [];
       tip.textContent = `${columnName(col)} · ${fmtPrice(row.price)}  ${row.letters || "–"}  TPO ${row.tpo} · `
-        + `vol ${compact(row.volume / d)} (buy ${compact(row.buy / d)} / sell ${compact(row.sell / d)}, Δ ${signed(row.delta / d)})`;
+        + `vol ${compact(row.volume / d)} (buy ${compact(row.buy / d)} / sell ${compact(row.sell / d)}, Δ ${signed(row.delta / d)})`
+        + (names.length ? ` · ${names.join(" · ")}` : "");
       tip.style.top = `${Math.min(y + 12, v.layout.height - 24)}px`;
     },
     leave: () => {
@@ -237,7 +243,7 @@ export function MultiDayProfileChart({ config, units, lotSize }: Props) {
     const prevRow = settingsRef.current.rowSize;
     settingsRef.current = { showPoc: config.showPoc, showValueArea: config.showValueArea, mode: config.profileMode,
                             units, lotSize, rowSize: config.profileRow, zoomY: config.profileZoomY,
-                            zoomX: config.profileZoomX };
+                            zoomX: config.profileZoomX, levels: config.profileLevels };
     const v = viewRef.current;
     if (v && prevRow !== config.profileRow && !v.vp.follow) {
       // new row size: keep the price at the centre of the screen and roughly the same price span
@@ -248,7 +254,7 @@ export function MultiDayProfileChart({ config, units, lotSize }: Props) {
     schedule();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config.showPoc, config.showValueArea, config.profileMode, units, lotSize, config.profileRow,
-      config.profileZoomY, config.profileZoomX]);
+      config.profileZoomY, config.profileZoomX, levelsKey]);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -297,17 +303,27 @@ export function MultiDayProfileChart({ config, units, lotSize }: Props) {
         {col && <span className="font-semibold text-fg" aria-label="Focused session">{columnName(col)}</span>}
         {p?.stats ? (
           <>
-            <Fig label="POC" value={fmtPrice(p.poc_tpo)} />
-            <Fig label="vPOC" value={fmtPrice(p.poc_volume)} />
-            <Fig label="VAH" value={fmtPrice(p.value_area_tpo?.high)} />
-            <Fig label="VAL" value={fmtPrice(p.value_area_tpo?.low)} />
+            <Fig label="VPOC" value={fmtPrice(p.poc_volume)} />
+            <Fig label="TPOC" value={fmtPrice(p.poc_tpo)} />
+            <Fig label="VWAP" value={fmtPrice(p.vwap)} />
+            <Fig label="TWAP" value={fmtPrice(p.twap)} />
+            <Fig label="VA" value={p.value_area_volume ? `${fmtPrice(p.value_area_volume.low)}–${fmtPrice(p.value_area_volume.high)}` : "—"} />
+            <Fig label="T-VA" value={p.value_area_tpo ? `${fmtPrice(p.value_area_tpo.low)}–${fmtPrice(p.value_area_tpo.high)}` : "—"} />
             <Fig label="IB" value={p.initial_balance?.high != null
               ? `${fmtPrice(p.initial_balance.low)}–${fmtPrice(p.initial_balance.high)}${p.initial_balance.final ? "" : " (forming)"}`
               : "—"} />
+            {(p.ib_extensions?.reached_up || p.ib_extensions?.reached_down) && (
+              <Fig label="IB ext" value={[p.ib_extensions.reached_up && `${p.ib_extensions.reached_up}× up`,
+                                          p.ib_extensions.reached_down && `${p.ib_extensions.reached_down}× down`]
+                .filter(Boolean).join(" · ")} />
+            )}
             <Fig label="TPOs" value={String(p.stats.tpo_total)} />
             <Fig label="Vol" value={compact(p.stats.volume / d)} />
             <Fig label="Δ" value={signed(p.stats.delta / d)} tone={p.stats.delta >= 0 ? "buy" : "sell"} />
             {!!p.single_prints?.length && <Fig label="Singles" value={String(p.single_prints.length)} />}
+            {(p.weak_high || p.weak_low) && (
+              <Fig label="Weak" value={[p.weak_high && "high", p.weak_low && "low"].filter(Boolean).join(" · ")} />
+            )}
             {focus?.single && p.previous && <Fig label="Prev POC" value={fmtPrice(p.previous.poc_tpo)} />}
           </>
         ) : (
@@ -357,7 +373,8 @@ function Fig({ label, value, tone }: { label: string; value: string; tone?: "buy
 
 /** One session's profile inside its own column. Nothing here reaches another column. */
 function drawSession(ctx: CanvasRenderingContext2D, col: DayColumn, i: number, m: Mapper, l: MultiLayout,
-                     opts: { showPoc: boolean; showValueArea: boolean }, single: boolean) {
+                     opts: { showPoc: boolean; showValueArea: boolean; levels: readonly ProfileLevel[] }, single: boolean,
+                     rowSize: number) {
   const x0 = m.sessionToX(i);
   const tpoX0 = x0 + l.pad, volX = tpoX0 + l.tpoW + l.gap;
   const bottom = l.plotTop + l.plotH;
@@ -383,17 +400,17 @@ function drawSession(ctx: CanvasRenderingContext2D, col: DayColumn, i: number, m
   const band = (lo: number, hi: number) => [rowY(hi), rowY(lo) + l.rowPx] as const;
   const right = volX + (l.showVolume ? l.volumeW : 0);
 
-  if (opts.showValueArea && p.value_area_tpo) {
-    const [t, b] = band(p.value_area_tpo.low, p.value_area_tpo.high);
-    ctx.fillStyle = C.va;
+  const drawing = profileDrawing(p, { enabled: opts.levels, showPoc: opts.showPoc, showValueArea: opts.showValueArea,
+                                       previous: single });
+  for (const sh of drawing.shading) {                          // value areas, HVN bands: under the letters
+    const [t, b] = band(sh.low, sh.high);
+    ctx.fillStyle = sh.fill;
     ctx.fillRect(tpoX0 - 2, t, right - tpoX0 + 2, b - t);
-  }
-  if (opts.showPoc && p.poc_tpo != null) {
-    const y = rowY(p.poc_tpo);
-    ctx.fillStyle = "rgba(224,164,58,0.22)";
-    ctx.fillRect(tpoX0 - 2, y, l.tpoW + 2, l.rowPx);
-    ctx.fillStyle = C.poc;
-    ctx.fillRect(tpoX0 - 4, y, 2, l.rowPx);
+    if (sh.edge) {                                             // HVN: a thick brown band
+      ctx.fillStyle = sh.edge;
+      ctx.fillRect(tpoX0 - 2, t, right - tpoX0 + 2, 2);
+      ctx.fillRect(tpoX0 - 2, b - 2, right - tpoX0 + 2, 2);
+    }
   }
 
   const maxVol = p.rows.reduce((mx, r) => Math.max(mx, r.volume), 0);      // this day's own scale
@@ -431,16 +448,25 @@ function drawSession(ctx: CanvasRenderingContext2D, col: DayColumn, i: number, m
       ctx.globalAlpha = 1;
     }
   }
-  if (opts.showPoc && p.poc_volume != null) {
-    const y = rowY(p.poc_volume);
-    ctx.strokeStyle = C.vpoc;
-    if (l.showVolume) ctx.strokeRect(volX - 0.5, Math.round(y) + 0.5, l.volumeW + 1, Math.max(2, l.rowPx - 1));
-    else ctx.strokeRect(tpoX0 + l.tpoW + 1.5, Math.round(y) + 0.5, 4, Math.max(2, l.rowPx - 1));   // vPOC tick
+  if (l.showVolume) {                                          // LVN ticks (HVNs are bands)
+    ctx.fillStyle = C.lvn;
+    for (const price of p.lvn ?? []) ctx.fillRect(volX - 4, rowY(price) + l.rowPx / 2 - 1, 3, 2);
   }
-  if (l.showVolume) {
-    for (const [prices, color] of [[p.hvn ?? [], C.hvn], [p.lvn ?? [], C.lvn]] as const) {
-      ctx.fillStyle = color;
-      for (const price of prices) ctx.fillRect(volX - 4, rowY(price) + l.rowPx / 2 - 1, 3, 2);
+  drawLevels(ctx, drawing.lines, x0, tpoX0, right, l, m, rowSize, bottom);
+  drawTrail(ctx, drawing.trail, p, tpoX0, l, m);
+  if (drawing.weak.length && p.rows.length) {
+    ctx.font = "9px ui-sans-serif, system-ui, sans-serif";
+    ctx.fillStyle = LEVEL_COLORS.weak;
+    for (const edge of drawing.weak) {
+      const y = edge === "high" ? rowY(p.rows[0].price) : rowY(p.rows[p.rows.length - 1].price) + l.rowPx;
+      ctx.setLineDash([2, 2]);
+      ctx.strokeStyle = LEVEL_COLORS.weak;
+      ctx.beginPath();
+      ctx.moveTo(tpoX0, Math.round(y) + 0.5);
+      ctx.lineTo(tpoX0 + l.tpoW, Math.round(y) + 0.5);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillText(edge === "high" ? "weak high" : "weak low", tpoX0 + 2, y + (edge === "high" ? -6 : 7));
     }
   }
   for (const sp of [...(p.single_prints ?? []), ...(p.tails ?? [])]) {
@@ -470,23 +496,79 @@ function drawSession(ctx: CanvasRenderingContext2D, col: DayColumn, i: number, m
       ctx.fillRect(x + l.cellW - 2, rowY(per.close) + 1, 2, Math.max(2, l.rowPx - 2));
     }
   }
-  if (single && p.previous) {                                  // previous-session levels: single-day view only
-    ctx.font = "10px ui-sans-serif, system-ui, sans-serif";
-    for (const [label, value] of [["pPOC", p.previous.poc_tpo], ["pVAH", p.previous.vah], ["pVAL", p.previous.val]] as const) {
-      if (value == null) continue;
-      const y = Math.round(rowY(value) + l.rowPx / 2) + 0.5;
-      if (y < l.plotTop || y > bottom) continue;
-      ctx.strokeStyle = C.prev;
-      ctx.setLineDash([1, 3]);
+}
+
+/** y of a level: a row's centre, or (exact prices such as VWAP) where the price falls inside its row. */
+function levelY(line: LevelLine, m: Mapper, l: MultiLayout, rowSize: number): number {
+  const top = m.priceToY(line.price);
+  if (!line.exact) return top + l.rowPx / 2;
+  const floor = Math.floor(line.price / rowSize + 1e-9) * rowSize;
+  return top + ((floor + rowSize - line.price) / rowSize) * l.rowPx;
+}
+
+/** Level lines over the letters, labelled at the column's right edge (labels on one height stack leftwards). */
+function drawLevels(ctx: CanvasRenderingContext2D, lines: LevelLine[], x0: number, from: number, to: number,
+                    l: MultiLayout, m: Mapper, rowSize: number, bottom: number) {
+  const placed: { y: number; x: number }[] = [];
+  const right = Math.min(x0 + l.colW, l.axisX) - 3;
+  ctx.font = "9px ui-sans-serif, system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  for (const line of lines) {
+    const y = levelY(line, m, l, rowSize);
+    if (y < l.plotTop - 2 || y > bottom + 2) continue;
+    ctx.strokeStyle = line.color;
+    ctx.fillStyle = line.color;
+    if (line.style === "band") {                               // VPOC / TPOC: a thick translucent pink row
+      const h = Math.max(3, l.rowPx);
+      ctx.globalAlpha = 0.38;
+      ctx.fillRect(from - 2, y - h / 2, to - from + 2, h);
+      ctx.globalAlpha = 1;
+      ctx.fillRect(from - 4, y - h / 2, 2, h);
+    } else {
+      ctx.lineWidth = line.style === "thick" ? 3 : 1;
+      ctx.setLineDash(line.style === "dashed" ? [4, 3] : line.style === "dotted" ? [1, 3] : []);
       ctx.beginPath();
-      ctx.moveTo(x0, y);
-      ctx.lineTo(Math.min(x0 + l.colW, l.axisX), y);
+      const yy = line.style === "thick" ? y : Math.round(y) + 0.5;
+      ctx.moveTo(line.style === "dotted" ? x0 : from - 2, yy);
+      ctx.lineTo(line.style === "dotted" ? right : to, yy);
       ctx.stroke();
       ctx.setLineDash([]);
-      ctx.fillStyle = C.prev;
-      ctx.fillText(label, Math.min(x0 + l.colW, l.axisX) - 30, y - 6);
+      ctx.lineWidth = 1;
     }
+    if (l.colW < 110) continue;                                // too narrow for labels
+    const w = ctx.measureText(line.label).width;
+    let x = right - w;
+    for (const q of placed) if (Math.abs(q.y - y) < 9) x = Math.min(x, q.x - w - 4);
+    if (x < from) continue;
+    placed.push({ y, x });
+    ctx.fillText(line.label, x, y - (line.style === "band" ? 0 : 6));
   }
+}
+
+/** The developing POC: where the volume POC stood at the end of each period, joined left to right. */
+function drawTrail(ctx: CanvasRenderingContext2D, trail: { period: number; price: number }[], p: { periods?: unknown[] },
+                   tpoX0: number, l: MultiLayout, m: Mapper) {
+  if (trail.length < 1) return;
+  const n = Math.max(trail.length, p.periods?.length ?? 0, 1);
+  const xOf = (period: number) => l.mode === "split" ? tpoX0 + (period + 0.5) * l.cellW
+    : tpoX0 + ((period + 0.5) / n) * l.tpoW;
+  ctx.strokeStyle = LEVEL_COLORS.poc;
+  ctx.fillStyle = LEVEL_COLORS.poc;
+  ctx.setLineDash([2, 2]);
+  ctx.beginPath();
+  trail.forEach((t, k) => {
+    const x = xOf(t.period), y = m.priceToY(t.price) + l.rowPx / 2;
+    if (k) ctx.lineTo(x, y);
+    else ctx.moveTo(x, y);
+  });
+  ctx.stroke();
+  ctx.setLineDash([]);
+  trail.forEach((t, k) => {
+    const r = k === trail.length - 1 ? 3 : 1.6;
+    ctx.beginPath();
+    ctx.arc(xOf(t.period), m.priceToY(t.price) + l.rowPx / 2, r, 0, Math.PI * 2);
+    ctx.fill();
+  });
 }
 
 function drawHeader(ctx: CanvasRenderingContext2D, columns: DayColumn[], first: number, last: number, m: Mapper,

@@ -273,7 +273,7 @@ test("market profile: sidebar switches one chart, the other stays a footprint", 
 
   const figures = page.getByLabel("Market profile figures c2");
   await expect(figures).toContainText("POC", { timeout: 15_000 });
-  await expect(figures).toContainText("VAH");
+  await expect(figures).toContainText("T-VA");                              // volume VA and TPO VA ranges
   await expect(figures).toContainText("TPOs");
   await c2.getByLabel("Profile row size").selectOption("10");
   await expect(c2.getByLabel("Profile row size")).toHaveValue("10");
@@ -474,4 +474,33 @@ test("broker session: top-bar status, admin re-login (synthetic feed: no session
   await page.reload();
   await expect(page.getByLabel("Broker session")).toContainText(/Broker: logged in \d\d:\d\d/);
   if (process.env.E2E_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.E2E_SCREENSHOT_DIR}/broker-ready.png` });
+});
+
+test("market profile levels: VWAP / TWAP figures, Levels menu saved per chart", async ({ page }) => {
+  await openTerminal(page);
+  await page.getByRole("button", { name: "1 chart" }).click();
+  const chart = page.getByRole("region", { name: "Chart c1" });
+  await chart.click();
+  await page.getByRole("button", { name: "Market profile on chart c1" }).click();
+  await chart.getByLabel("Profile sessions").selectOption("0");
+  const figures = page.getByLabel("Market profile figures c1");
+  await expect(figures).toContainText("VWAP", { timeout: 15_000 });
+  await expect(figures).toContainText("TWAP");
+  await expect(figures).toContainText("VPOC");
+
+  await chart.getByRole("button", { name: "Profile levels" }).click();
+  const hvn = page.getByRole("checkbox", { name: /^HVN/ });
+  await hvn.check();                                                          // saved state may hold another choice
+  await hvn.uncheck();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: /Workspace/ })).toContainText("Saved", { timeout: 5_000 });
+  await page.reload();
+  await expect(page.getByRole("button", { name: /Workspace/ })).toContainText(/Saved|Saving/);
+  await chart.getByRole("button", { name: "Profile levels" }).click();
+  await expect(page.getByRole("checkbox", { name: /^HVN/ })).not.toBeChecked();
+  await expect(page.getByRole("checkbox", { name: /^V-VA/ })).toBeChecked();
+  await page.getByRole("checkbox", { name: /^HVN/ }).check();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Order-flow footprint on chart c1" }).click();
+  await expect(page.getByRole("button", { name: /Workspace/ })).toContainText("Saved", { timeout: 5_000 });
 });

@@ -183,6 +183,9 @@ export interface MarketProfileLevels {
   poc_volume: number | null;
   vah: number | null;
   val: number | null;
+  vah_volume?: number | null;
+  val_volume?: number | null;
+  vwap?: number | null;
   high: number;
   low: number;
 }
@@ -207,7 +210,15 @@ export interface MarketProfile {
   single_prints?: { low: number; high: number; letter: string }[];
   tails?: { low: number; high: number; letter: string; kind: "buying" | "selling" }[];
   hvn?: number[];
+  hvn_bands?: { low: number; high: number; peak: number }[];
   lvn?: number[];
+  vwap?: number | null;                // exact, from every trade
+  twap?: number | null;                // the TPO median row
+  ib_extensions?: { up: { multiple: number; price: number }[]; down: { multiple: number; price: number }[];
+                    reached_up: number | null; reached_down: number | null } | null;
+  dpoc?: { price: number | null; trail: { period: number; letter: string; price: number }[] };
+  weak_high?: boolean;
+  weak_low?: boolean;
   stats?: { open: number; high: number; low: number; close: number; tpo_total: number; volume: number;
             delta: number; trades: number };
   previous?: MarketProfileLevels | null;
