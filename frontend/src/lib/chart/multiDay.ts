@@ -20,7 +20,7 @@ export type ProfileMode = "stacked" | "split";
 
 export interface DayColumn {
   date: string;
-  state: "historical" | "live" | "error";
+  state: "historical" | "live" | "error" | "composite";
   profile: MarketProfile | null;
   error?: string;
   replay?: boolean;          // the live column is a replayed session, not today

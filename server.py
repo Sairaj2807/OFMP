@@ -42,6 +42,7 @@ from backend.app.infrastructure.postgres.repositories import (last_open_interest
                                                               untagged_session_dates, upsert_instrument)
 from backend.app.services.footprint_history import FootprintHistory, day_cap
 from backend.app.services.profile_history import ProfileHistory
+from backend.app.domain.profile.levels import LOOKBACK_SESSIONS, composite_profile, naked_pocs
 from backend.app.services.broker_session import BrokerSession, SessionTimes
 from backend.app.services.replay import ReplayLibrary, ReplaySession
 from backend.app.infrastructure.postgres.rows import IST, ist_date
@@ -680,6 +681,33 @@ class ServerMarketGateway:
         out = await service.history(symbol, tick, row, before=before, limit=limit,
                                     date_from=date_cls.fromisoformat(date_from) if date_from else None)
         return {**out, "live_date": live}
+
+    async def profile_levels(self, row: float, composite: Optional[str]) -> dict:
+        """Levels across finished sessions of the active contract: naked POCs (look-back 20 sessions)
+        and, when asked, a composite profile (5d / 10d / 20d / week / month). See domain/profile/levels.py."""
+        contract = STATE.get("contract") or {}
+        symbol, tick = contract.get("tradingsymbol"), contract.get("tick_size", 0.1)
+        live = _live_session_date()
+        base = {"symbol": symbol, "row_size": row, "live_date": live, "lookback": LOOKBACK_SESSIONS,
+                "naked_pocs": [], "composite": None}
+        service = _profile_history()
+        if service is None or symbol is None:
+            return {**base, "unavailable": "history needs the database" if service is None else "no active contract"}
+        before = date_cls.fromisoformat(live)
+
+        async def days(limit: int, date_from=None) -> list:
+            out = await service.history(symbol, tick, row, before=before, limit=limit, date_from=date_from)
+            return [(s["date"], s["profile"]) for s in out["sessions"] if s.get("state") == "historical"]
+        result = {**base, "naked_pocs": naked_pocs(await days(LOOKBACK_SESSIONS), row)}
+        if composite:
+            if composite == "week":
+                window = await days(7, before - timedelta(days=before.weekday()))
+            elif composite == "month":
+                window = await days(31, before.replace(day=1))
+            else:
+                window = await days(int(composite.rstrip("d")))
+            result["composite"] = composite_profile(window, row, composite)
+        return result
 
     async def footprint_sessions(self, interval_sec: int) -> dict:
         """Finished sessions of the active contract available for the footprint, newest

@@ -7,9 +7,10 @@
 //   IB extensions 1.5x / 2x / 3x, the developing POC trail, weak highs / lows,
 //   and the previous session's POC / VA / high / low.
 // The server computes every value (backend/app/domain/profile/analytics.py).
-import type { MarketProfile } from "../types";
+import { shortDate } from "./multiDay";
+import type { MarketProfile, NakedPoc } from "../types";
 
-export const PROFILE_LEVELS = ["vva", "tva", "hvn", "ibext", "dpoc", "weak", "prev"] as const;
+export const PROFILE_LEVELS = ["vva", "tva", "hvn", "ibext", "dpoc", "weak", "prev", "npoc"] as const;
 export type ProfileLevel = (typeof PROFILE_LEVELS)[number];
 export const PROFILE_LEVEL_LABELS: Record<ProfileLevel, string> = {
   vva: "V-VA (VAH · VAL · VPOC · VWAP)",
@@ -19,7 +20,25 @@ export const PROFILE_LEVEL_LABELS: Record<ProfileLevel, string> = {
   dpoc: "Developing POC trail",
   weak: "Weak high / low",
   prev: "Previous day (POC · VA · high · low)",
+  npoc: "Naked POCs (untouched VPOCs, 20 sessions)",
 };
+
+/** Composite profile windows (finished sessions of the active contract). */
+export const COMPOSITE_WINDOWS = ["off", "5d", "10d", "20d", "week", "month"] as const;
+export type CompositeWindow = (typeof COMPOSITE_WINDOWS)[number];
+export const COMPOSITE_LABELS: Record<CompositeWindow, string> = {
+  off: "No composite", "5d": "Composite 5 days", "10d": "Composite 10 days", "20d": "Composite 20 days",
+  week: "Composite this week", month: "Composite this month",
+};
+
+/** Naked POCs still untouched today: today's live range has not reached their row. */
+export function nakedToday(npocs: NakedPoc[], today: MarketProfile | null, rowSize: number): NakedPoc[] {
+  const s = today?.stats;
+  if (!s) return npocs;
+  return npocs.filter((n) => !(s.low < n.price + rowSize - 1e-9 && s.high >= n.price - 1e-9));
+}
+
+export const nakedLabel = (n: NakedPoc) => `nPOC ${shortDate(n.date)} · ${n.sessions_ago}d`;
 
 export const LEVEL_COLORS = {
   poc: "#ff5fa8",                       // VPOC / TPOC: pink
@@ -27,7 +46,7 @@ export const LEVEL_COLORS = {
   hvn: "#9a6a3a",                       // HVN: brown
   hvnFill: "rgba(154,106,58,0.30)",
   vaV: "rgba(76,141,255,0.10)", vaT: "rgba(160,120,255,0.08)", vaEdge: "#4c8dff", vaEdgeT: "#a078ff",
-  ib: "#4c8dff", prev: "#8a93a3", weak: "#e0a43a",
+  ib: "#4c8dff", prev: "#8a93a3", weak: "#e0a43a", composite: "#7d8796",
 };
 
 export type LineStyle = "band" | "thick" | "solid" | "dashed" | "dotted";

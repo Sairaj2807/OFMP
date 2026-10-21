@@ -132,6 +132,17 @@ async def profile_history(request: Request, row: int = Query(DEFAULT_ROW),
     return await _gateway(request).profile_history(row, limit, date_from, date_to)
 
 
+@market_router.get("/profile/levels", dependencies=[Depends(require_permission("market.read"))],
+                   summary="Naked POCs and a composite profile from the active contract's finished sessions")
+async def profile_levels(request: Request, row: int = Query(DEFAULT_ROW),
+                         composite: Optional[str] = Query(None, pattern=r"^(5d|10d|20d|week|month)$")):
+    if row not in ROW_SIZES:
+        raise AppError("INVALID_ROW", f"row must be one of {list(ROW_SIZES)}", 422)
+    body = await _gateway(request).profile_levels(row, composite)
+    # finished sessions only: stable through the day, so a short private cache is safe
+    return JSONResponse(body, headers={"Cache-Control": "private, max-age=60"})
+
+
 def _footprint_settings(request: Request, ppr: int, interval: int) -> None:
     if not 1 <= ppr <= 5:
         raise AppError("INVALID_PPR", "ppr must be 1-5", 422)

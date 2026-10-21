@@ -8,12 +8,12 @@ import { Button, Select } from "@/components/ui/controls";
 import { type ChartStats, useLiveStats } from "@/hooks/useLiveStream";
 import { dayCap } from "@/lib/chart/footprintSessions";
 import { TABLE_ROW_LABELS } from "@/lib/chart/footprintTable";
-import { PROFILE_LEVEL_LABELS } from "@/lib/chart/profileLevels";
+import { COMPOSITE_LABELS, PROFILE_LEVEL_LABELS } from "@/lib/chart/profileLevels";
 import { intervalLabel } from "@/lib/format";
 import { useSession } from "@/stores/session";
 import {
-  type CellStyle, type ChartConfig, type DisplayMode, FOOTPRINT_DAYS, PROFILE_DAYS, PROFILE_LEVELS, PROFILE_ROWS, TABLE_ROWS,
-  useTerminal,
+  type CellStyle, type ChartConfig, COMPOSITE_WINDOWS, type CompositeWindow, type DisplayMode, FOOTPRINT_DAYS, PROFILE_DAYS,
+  PROFILE_LEVELS, PROFILE_ROWS, TABLE_ROWS, useTerminal,
 } from "@/stores/terminal";
 import { ReplayBar, loadReplaySessions } from "./ReplayBar";
 
@@ -63,6 +63,12 @@ export function ChartPanel({ config }: { config: ChartConfig }) {
                     title={config.mode === "replay" ? "Replay shows one session" : "Finished sessions shown before today"}
                     onChange={(e) => update(config.id, { profileDays: Number(e.target.value) })}>
               {PROFILE_DAYS.map((n) => <option key={n} value={n}>{n === 0 ? "Today" : `${n} days + today`}</option>)}
+            </Select>
+            <Select label="Composite profile" value={config.profileComposite} disabled={config.mode === "replay"}
+                    title={config.mode === "replay" ? "Replay shows one session"
+                      : "A profile merged from finished sessions, shown at the left"}
+                    onChange={(e) => update(config.id, { profileComposite: e.target.value as CompositeWindow })}>
+              {COMPOSITE_WINDOWS.map((w) => <option key={w} value={w}>{COMPOSITE_LABELS[w]}</option>)}
             </Select>
             <div className="flex items-center gap-0.5" role="group" aria-label="Profile layout">
               <Button active={config.profileMode === "stacked"} onClick={() => update(config.id, { profileMode: "stacked" })}

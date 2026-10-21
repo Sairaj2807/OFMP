@@ -3,7 +3,7 @@
 // hooks/useWorkspaces.ts) — the same versioned shape in both places, so an
 // older saved layout is migrated, never discarded.
 import { TABLE_ROWS, type TableRow } from "@/lib/chart/footprintTable";
-import { PROFILE_LEVELS, type ProfileLevel } from "@/lib/chart/profileLevels";
+import { COMPOSITE_WINDOWS, type CompositeWindow, PROFILE_LEVELS, type ProfileLevel } from "@/lib/chart/profileLevels";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
@@ -19,7 +19,7 @@ export type ProfileMode = "stacked" | "split";
 export const PROFILE_DAYS = [0, 5, 10, 20] as const;                // finished sessions shown before today
 export const FOOTPRINT_DAYS = [0, 5, 10, 20] as const;              // capped by interval (lib/chart/footprintSessions)
 export { TABLE_ROWS, type TableRow } from "@/lib/chart/footprintTable";
-export { PROFILE_LEVELS, type ProfileLevel } from "@/lib/chart/profileLevels";
+export { COMPOSITE_WINDOWS, type CompositeWindow, PROFILE_LEVELS, type ProfileLevel } from "@/lib/chart/profileLevels";
 
 export interface ChartConfig {
   id: string;
@@ -42,6 +42,7 @@ export interface ChartConfig {
   showTable: boolean;        // footprint table under the candles (Volume, VPOC, VPOC Vol, COT, OI, dOI)
   tableRows: TableRow[];     // rows shown, in the table's fixed order
   profileLevels: ProfileLevel[];   // market profile levels shown (V-VA, T-VA, HVN, IB extensions, ...)
+  profileComposite: CompositeWindow;  // composite profile column (live only)
 }
 
 export const CHART_IDS = ["c1", "c2", "c3", "c4"] as const;
@@ -52,7 +53,7 @@ const defaultChart = (id: string, interval: number): ChartConfig => ({
   showPoc: true, showValueArea: true, showImbalances: true, mode: "live", replayDate: null,
   view: "footprint", profileRow: DEFAULT_PROFILE_ROW, profileMode: "stacked", profileDays: 0,
   profileZoomY: 0, profileZoomX: 0, footprintDays: 0,
-  showTable: true, tableRows: [...TABLE_ROWS], profileLevels: [...PROFILE_LEVELS],
+  showTable: true, tableRows: [...TABLE_ROWS], profileLevels: [...PROFILE_LEVELS], profileComposite: "off",
 });
 
 /** The persisted/synced part of the terminal state. */
@@ -92,7 +93,7 @@ export const STORAGE_VERSION = 9;
  *   v5 -> v6: charts gained profileZoomY/profileZoomX (0 = fit, the previous behaviour).
  *   v6 -> v7: charts gained footprintDays (existing footprints show today only).
  *   v7 -> v8: charts gained showTable/tableRows (the footprint table, on with every row).
- *   v8 -> v9: charts gained profileLevels (market profile levels, all on).
+ *   v8 -> v9: charts gained profileLevels (market profile levels, all on) and profileComposite ("off").
  */
 export function migrateConfig(raw: unknown): TerminalConfig {
   const src = (raw && typeof raw === "object" ? raw : {}) as Partial<TerminalConfig>;
@@ -116,6 +117,7 @@ export function migrateConfig(raw: unknown): TerminalConfig {
     }
     if (!(FOOTPRINT_DAYS as readonly number[]).includes(c.footprintDays)) c.footprintDays = 0;
     if (typeof c.showTable !== "boolean") c.showTable = true;
+    if (!(COMPOSITE_WINDOWS as readonly string[]).includes(c.profileComposite)) c.profileComposite = "off";
     c.profileLevels = Array.isArray(c.profileLevels)
       ? PROFILE_LEVELS.filter((l) => (c.profileLevels as unknown[]).includes(l)) : [...PROFILE_LEVELS];
     c.tableRows = Array.isArray(c.tableRows)

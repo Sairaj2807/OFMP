@@ -500,7 +500,15 @@ test("market profile levels: VWAP / TWAP figures, Levels menu saved per chart", 
   await expect(page.getByRole("checkbox", { name: /^HVN/ })).not.toBeChecked();
   await expect(page.getByRole("checkbox", { name: /^V-VA/ })).toBeChecked();
   await page.getByRole("checkbox", { name: /^HVN/ }).check();
+  await page.getByRole("checkbox", { name: /^Naked POCs/ }).check();
   await page.keyboard.press("Escape");
+
+  // composite profile: asked for with the chart's row size (the synthetic contract has no finished sessions)
+  const asked = page.waitForResponse(/\/api\/v1\/market\/profile\/levels\?row=\d+&composite=week$/);
+  await chart.getByLabel("Composite profile").selectOption("week");
+  const body = await (await asked).json();
+  expect(body).toMatchObject({ naked_pocs: [], composite: null, lookback: 20 });
+  await chart.getByLabel("Composite profile").selectOption("off");
   await page.getByRole("button", { name: "Order-flow footprint on chart c1" }).click();
   await expect(page.getByRole("button", { name: /Workspace/ })).toContainText("Saved", { timeout: 5_000 });
 });

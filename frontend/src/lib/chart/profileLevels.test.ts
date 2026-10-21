@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { MarketProfile } from "../types";
-import { LEVEL_COLORS, levelsOnRow, PROFILE_LEVELS, profileDrawing } from "./profileLevels";
+import { shortDate } from "./multiDay";
+import { LEVEL_COLORS, levelsOnRow, nakedLabel, nakedToday, PROFILE_LEVELS, profileDrawing } from "./profileLevels";
 
 const p: MarketProfile = {
   date: "2026-10-21", rows: [], poc_volume: 24510, poc_tpo: 24505, vwap: 24512.37, twap: 24505,
@@ -48,5 +49,22 @@ describe("profile levels", () => {
     expect(levelsOnRow(d, 24505, 5)).toEqual(["TPOC", "TWAP"]);
     expect(levelsOnRow(d, 24530, 5)).toEqual(["HVN"]);
     expect(levelsOnRow(d, 24600, 5)).toEqual([]);
+  });
+});
+
+describe("naked POCs today", () => {
+  const npocs = [{ date: "2026-10-13", price: 22790, sessions_ago: 3 }, { date: "2026-10-16", price: 23120, sessions_ago: 2 }];
+  const today = (low: number, high: number): MarketProfile =>
+    ({ date: "2026-10-22", rows: [], stats: { open: low, high, low, close: high, tpo_total: 1, volume: 1, delta: 0, trades: 1 } });
+
+  it("hides the ones today's range has reached (any part of their row)", () => {
+    expect(nakedToday(npocs, today(22900, 23000), 5)).toEqual(npocs);
+    expect(nakedToday(npocs, today(22794, 23000), 5).map((n) => n.price)).toEqual([23120]);   // inside the 22790 row
+    expect(nakedToday(npocs, today(22700, 23120), 5)).toEqual([]);
+    expect(nakedToday(npocs, null, 5)).toEqual(npocs);                                       // no trades yet today
+  });
+
+  it("labels each with its date and age in sessions", () => {
+    expect(nakedLabel(npocs[0])).toBe(`nPOC ${shortDate("2026-10-13")} · 3d`);
   });
 });

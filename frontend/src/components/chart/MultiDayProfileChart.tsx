@@ -12,7 +12,10 @@
 import { useEffect, useRef, useState } from "react";
 
 import { periodColor } from "@/lib/chart/profileLayout";
-import { LEVEL_COLORS, levelsOnRow, type LevelLine, type ProfileLevel, profileDrawing } from "@/lib/chart/profileLevels";
+import {
+  LEVEL_COLORS, levelsOnRow, type LevelLine, nakedLabel, nakedToday, type ProfileLevel, profileDrawing,
+} from "@/lib/chart/profileLevels";
+import { api } from "@/lib/api";
 import {
   clampViewport, collectColumns, computeLayout, type DayColumn, fitZoom, followView, labelStep, mapper as makeMapper,
   type Mapper, type MultiLayout, panBy, type PriceGrid, priceGrid, rowAt, shortDate, type Viewport, visibleSpan,
@@ -22,7 +25,7 @@ import { compact, price as fmtPrice, signed } from "@/lib/format";
 import { historyBus } from "@/lib/profileHistory";
 import { snapshotBus } from "@/lib/snapshots";
 import { type Region, useProfileViewport, type ViewportActions } from "@/hooks/useProfileViewport";
-import type { MarketProfile, ProfileHistory } from "@/lib/types";
+import type { MarketProfile, NakedPoc, ProfileHistory, ProfileLevelsResponse } from "@/lib/types";
 import { type ChartConfig, type Units, useTerminal } from "@/stores/terminal";
 
 const C = {
@@ -60,6 +63,7 @@ export function MultiDayProfileChart({ config, units, lotSize }: Props) {
   const tipRef = useRef<HTMLDivElement>(null);
   const liveRef = useRef<{ profile: MarketProfile | null; replay: boolean }>({ profile: null, replay: false });
   const historyRef = useRef<ProfileHistory | undefined>(undefined);
+  const levelsRef = useRef<ProfileLevelsResponse | null>(null);     // naked POCs, composite (finished sessions)
   const vpRef = useRef<Viewport | null>(null);                   // null: not initialised yet
   const viewRef = useRef<View | null>(null);
   const anchorRef = useRef<{ date: string; offset: number } | null>(null);   // keeps a day in place when columns change
@@ -119,6 +123,8 @@ export function MultiDayProfileChart({ config, units, lotSize }: Props) {
     const s = settingsRef.current;
     const live = liveRef.current;
     const columns = collectColumns(live.replay ? undefined : historyRef.current, live.profile, live.replay);
+    const composite = live.replay ? null : levelsRef.current?.composite;
+    if (composite?.rows?.length) columns.unshift({ date: "composite", state: "composite", profile: composite });
     const rowSize = live.profile?.row_size ?? historyRef.current?.row_size ?? s.rowSize;
     const grid = priceGrid(columns, rowSize);
     publishFocus(columns);
@@ -154,6 +160,9 @@ export function MultiDayProfileChart({ config, units, lotSize }: Props) {
     ctx.rect(0, layout.plotTop, layout.axisX, layout.plotH + layout.footer);
     ctx.clip();
     for (let i = first; i <= last; i++) drawSession(ctx, columns[i], i, m, layout, s, columns.length === 1, grid.rowSize);
+    if (!live.replay && s.levels.includes("npoc") && levelsRef.current) {
+      drawNaked(ctx, nakedToday(levelsRef.current.naked_pocs, live.profile, grid.rowSize), columns, m, layout);
+    }
     ctx.restore();
     drawHeader(ctx, columns, first, last, m, layout);
     drawAxis(ctx, m, layout, grid, live.profile?.stats?.close ?? null);
@@ -286,6 +295,25 @@ export function MultiDayProfileChart({ config, units, lotSize }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config.profileDays, config.mode, config.replayDate]);
 
+  useEffect(() => {
+    levelsRef.current = null;
+    if (config.mode !== "live") return;
+    let cancelled = false;
+    const load = () => api.profileLevels(config.profileRow, config.profileComposite === "off" ? null : config.profileComposite)
+      .then((r) => {
+        if (cancelled) return;
+        levelsRef.current = r;
+        schedule();
+      }).catch(() => undefined);
+    void load();
+    const timer = setInterval(load, 5 * 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.mode, config.profileRow, config.profileComposite]);
+
   useEffect(() => () => {
     if (zoomSaveRef.current) clearTimeout(zoomSaveRef.current);
   }, []);
@@ -355,6 +383,10 @@ export function MultiDayProfileChart({ config, units, lotSize }: Props) {
 }
 
 function columnName(col: DayColumn): string {
+  if (col.state === "composite") {
+    const c = (col.profile as ProfileLevelsResponse["composite"])?.composite;
+    return c ? `Composite ${c.days} sessions (${shortDate(c.from)} – ${shortDate(c.to)})` : "Composite";
+  }
   if (col.replay) return `Replay ${shortDate(col.date)}`;
   if (col.state === "live") return col.date === "today" ? "Today" : `Today ${shortDate(col.date)}`;
   return shortDate(col.date);
@@ -418,10 +450,18 @@ function drawSession(ctx: CanvasRenderingContext2D, col: DayColumn, i: number, m
   ctx.textBaseline = "middle";
   ctx.font = `${l.fontPx}px ui-monospace, Consolas, monospace`;
   const h = Math.max(1, l.rowPx - (l.rowPx >= 4 ? 2 : 0));
+  const maxTpo = col.state === "composite" ? p.rows.reduce((mx, r) => Math.max(mx, r.tpo), 0) : 0;
   for (const row of p.rows) {
     const y = rowY(row.price);
     if (y + l.rowPx < l.plotTop || y > bottom) continue;                  // only visible rows
-    if (l.thinBars) {                                                     // extreme zoom-out: one bar per row
+    if (col.state === "composite") {                                      // merged days: TPO counts as bars
+      if (maxTpo > 0 && row.tpo > 0) {
+        ctx.fillStyle = LEVEL_COLORS.composite;
+        ctx.globalAlpha = 0.65;
+        ctx.fillRect(tpoX0, y + (l.rowPx >= 4 ? 1 : 0), Math.max(1, (row.tpo / maxTpo) * l.tpoW), h);
+        ctx.globalAlpha = 1;
+      }
+    } else if (l.thinBars) {                                                     // extreme zoom-out: one bar per row
       ctx.fillStyle = C.text;
       ctx.globalAlpha = 0.6;
       ctx.fillRect(tpoX0, y, Math.max(1, row.letters.length * l.cellW), h);
@@ -496,6 +536,46 @@ function drawSession(ctx: CanvasRenderingContext2D, col: DayColumn, i: number, m
       ctx.fillRect(x + l.cellW - 2, rowY(per.close) + 1, 2, Math.max(2, l.rowPx - 2));
     }
   }
+}
+
+/** Naked POCs: dashed pink lines from their own session to the price axis; off-screen ones as edge markers. */
+function drawNaked(ctx: CanvasRenderingContext2D, npocs: NakedPoc[], columns: DayColumn[], m: Mapper, l: MultiLayout) {
+  const above: NakedPoc[] = [], below: NakedPoc[] = [];
+  ctx.font = "9px ui-sans-serif, system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  for (const n of npocs) {
+    const y = m.priceToY(n.price) + l.rowPx / 2;
+    if (y < l.plotTop) { above.push(n); continue; }
+    if (y > l.plotTop + l.plotH) { below.push(n); continue; }
+    const i = columns.findIndex((c) => c.date === n.date);
+    const x0 = Math.max(0, i >= 0 ? m.sessionToX(i) : 0);
+    ctx.strokeStyle = LEVEL_COLORS.poc;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(x0, Math.round(y) + 0.5);
+    ctx.lineTo(l.axisX, Math.round(y) + 0.5);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.lineWidth = 1;
+    const label = nakedLabel(n);
+    ctx.fillStyle = LEVEL_COLORS.poc;
+    ctx.fillText(label, l.axisX - ctx.measureText(label).width - 4, y - 6);
+  }
+  // off-screen: "▲ nPOC 13 Oct · 3d 22790" at the top / bottom edge, nearest first
+  const edge = (list: NakedPoc[], top: boolean) => {
+    list.sort((a, b) => (top ? a.price - b.price : b.price - a.price)).slice(0, 3).forEach((n, k) => {
+      const text = `${top ? "▲" : "▼"} ${nakedLabel(n)} ${n.price}`;
+      const y = top ? l.plotTop + 8 + k * 12 : l.plotTop + l.plotH - 8 - k * 12;
+      ctx.fillStyle = "rgba(18,21,27,0.8)";
+      const w = ctx.measureText(text).width;
+      ctx.fillRect(l.axisX - w - 8, y - 6, w + 6, 12);
+      ctx.fillStyle = LEVEL_COLORS.poc;
+      ctx.fillText(text, l.axisX - w - 5, y);
+    });
+  };
+  edge(above, true);
+  edge(below, false);
 }
 
 /** y of a level: a row's centre, or (exact prices such as VWAP) where the price falls inside its row. */
@@ -587,14 +667,18 @@ function drawHeader(ctx: CanvasRenderingContext2D, columns: DayColumn[], first: 
     const live = col.state === "live";
     const full = l.colW >= 90, mid = l.colW >= 44;
     const date = shortDate(col.date);
-    const title = col.replay ? (full ? `REPLAY ${date}` : "REPLAY") : live ? "TODAY" : full || mid ? date : date.slice(0, 2);
-    ctx.fillStyle = live && !col.replay ? C.live : col.replay ? C.warn : C.strong;
+    const comp = col.state === "composite" ? (col.profile as ProfileLevelsResponse["composite"])?.composite : null;
+    const title = col.state === "composite" ? (full ? "COMPOSITE" : "COMP")
+      : col.replay ? (full ? `REPLAY ${date}` : "REPLAY") : live ? "TODAY" : full || mid ? date : date.slice(0, 2);
+    ctx.fillStyle = col.state === "composite" ? LEVEL_COLORS.composite
+      : live && !col.replay ? C.live : col.replay ? C.warn : C.strong;
     ctx.font = "600 11px ui-sans-serif, system-ui, sans-serif";
     ctx.fillText(title, x, 12);
     if (full) {
       ctx.fillStyle = C.muted;
       ctx.font = "10px ui-sans-serif, system-ui, sans-serif";
-      const sub = col.state === "error" ? "error" : col.replay ? "replay" : live
+      const sub = comp ? `${comp.days}d · ${shortDate(comp.from)}–${shortDate(comp.to)}`
+        : col.state === "error" ? "error" : col.replay ? "replay" : live
         ? (col.date !== "today" ? `${date} · live` : "live") : col.date.slice(0, 4);
       ctx.fillText(sub, x, 25);
     }

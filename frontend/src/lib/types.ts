@@ -224,6 +224,25 @@ export interface MarketProfile {
   previous?: MarketProfileLevels | null;
 }
 
+/** A volume POC of a finished session that no later session has traded into. */
+export interface NakedPoc {
+  date: string;
+  price: number;
+  sessions_ago: number;   // finished sessions after it, plus today
+}
+
+/** GET /api/v1/market/profile/levels. */
+export interface ProfileLevelsResponse {
+  symbol: string | null;
+  row_size: number;
+  live_date: string;
+  lookback: number;
+  naked_pocs: NakedPoc[];
+  composite: (MarketProfile & { composite?: { label: string; days: number; from: string; to: string;
+                                               dates: string[] } }) | null;
+  unavailable?: string;
+}
+
 export interface ServerMessage {
   type: "welcome" | "subscribed" | "replay_started" | "unsubscribed" | "snapshot" | "ping" | "pong" | "error" | "alert"
     | "profile_history";

@@ -8,6 +8,9 @@ class MarketGateway(Protocol):
     def active_contract(self) -> Optional[dict]:
         """The live contract (token, tradingsymbol, tick_size, lotsize, ...)."""
 
+    async def profile_levels(self, row: float, composite: Optional[str]) -> dict:
+        """Naked POCs and an optional composite profile from finished sessions."""
+
     def broker_status(self) -> Optional[dict]:
         """The daily broker session (None when not scheduled: synthetic feed, worker mode)."""
 

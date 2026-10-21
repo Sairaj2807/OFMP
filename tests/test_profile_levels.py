@@ -82,3 +82,45 @@ def test_previous_session_carries_volume_levels_and_its_range():
     assert (prev["high"], prev["low"]) == (24520, 24500)
     assert prev["vah_volume"] is not None and prev["val_volume"] is not None
     assert p.previous.period_volume and not p.period_volume.get(1)   # per-period volume moved with the day
+
+
+# ---- across sessions (phase 2): naked POCs, composite profile ----------------------------------
+
+def day_profile(day, trades):
+    return build_profile(session(trades, day=day), 5)
+
+
+def test_naked_pocs_are_the_vpocs_no_later_session_traded_into():
+    from backend.app.domain.profile.levels import naked_pocs
+    d1 = day_profile(21, [((9, 16), 24500, 900), ((9, 50), 24540, 10)])   # VPOC 24500
+    d2 = day_profile(22, [((9, 16), 24520, 900), ((9, 50), 24560, 10)])   # VPOC 24520; range 24520-24560
+    d3 = day_profile(23, [((9, 16), 24600, 900), ((9, 50), 24610, 10)])   # VPOC 24600; range 24600-24610
+    out = naked_pocs([("2026-09-21", d1), ("2026-09-22", d2), ("2026-09-23", d3)], 5)
+    # d1's 24500 was never revisited (d2 starts at 24520); d2's 24520 neither (d3 stays above); d3 is the last day
+    assert out == [{"date": "2026-09-21", "price": 24500, "sessions_ago": 3},
+                   {"date": "2026-09-22", "price": 24520, "sessions_ago": 2},
+                   {"date": "2026-09-23", "price": 24600, "sessions_ago": 1}]
+    d4 = day_profile(24, [((9, 16), 24604, 10), ((9, 50), 24515, 900)])   # range 24515-24604, VPOC 24515
+    out = naked_pocs([("2026-09-21", d1), ("2026-09-22", d2), ("2026-09-23", d3), ("2026-09-24", d4)], 5)
+    # d4 traded through the 24600 and 24520 rows (visited); 24500 stays naked (d4's low 24515 is above its row)
+    assert [(n["date"], n["price"]) for n in out] == [("2026-09-21", 24500), ("2026-09-24", 24515)]
+
+
+def test_composite_merges_sessions_with_the_single_session_rules():
+    from backend.app.domain.profile.levels import composite_profile
+    d1 = day_profile(21, [((9, 16), 24500, 600), ((9, 50), 24510, 100)])
+    d2 = day_profile(22, [((9, 16), 24510, 600), ((9, 50), 24520, 100)])
+    c = composite_profile([("2026-09-21", d1), ("2026-09-22", d2)], 5, "5d")
+    by = {r["price"]: r for r in c["rows"]}
+    assert by[24510]["volume"] == 700 and by[24510]["tpo"] == d1_tpo(d1, 24510) + d1_tpo(d2, 24510)
+    assert c["poc_volume"] == 24510 and c["stats"]["volume"] == 1400
+    assert c["vwap"] == round((d1["vwap"] * 700 + d2["vwap"] * 700) / 1400, 8)
+    assert (c["stats"]["low"], c["stats"]["high"]) == (24500, 24520)
+    assert c["composite"] == {"label": "5d", "days": 2, "from": "2026-09-21", "to": "2026-09-22",
+                              "dates": ["2026-09-21", "2026-09-22"]}
+    assert [r["price"] for r in c["rows"]] == [24520, 24515, 24510, 24505, 24500]   # contiguous, high to low
+    assert composite_profile([], 5, "5d") is None
+
+
+def d1_tpo(p, price):
+    return next(r["tpo"] for r in p["rows"] if r["price"] == price)

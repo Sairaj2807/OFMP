@@ -4,6 +4,7 @@
 // is refreshed once, transparently, then the request is retried.
 import type {
   AlertChannel, AlertEvent, AlertKinds, AlertRule, AlertRuleInput, BrokerStatus, Contract, FootprintDay, FootprintSessions,
+  ProfileLevelsResponse,
   MarketSession, ReplaySessionInfo, User, Workspace,
   WorkspaceSummary,
 } from "./types";
@@ -122,6 +123,10 @@ export class ApiClient {
   deleteAlertChannel = (id: string) => this.request<void>("DELETE", `/api/v1/alerts/channels/${encodeURIComponent(id)}`);
   testAlertChannel = (id: string) =>
     this.request<{ ok: boolean; error: string | null }>("POST", `/api/v1/alerts/channels/${encodeURIComponent(id)}/test`);
+
+  profileLevels = (row: number, composite: string | null) =>
+    this.request<ProfileLevelsResponse>("GET", `/api/v1/market/profile/levels?row=${row}`
+      + (composite ? `&composite=${encodeURIComponent(composite)}` : ""));
 
   brokerRelogin = () => this.request<{ accepted: boolean }>("POST", "/api/v1/admin/broker/relogin");
 

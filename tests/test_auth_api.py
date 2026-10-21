@@ -290,6 +290,18 @@ def test_broker_session_status_and_relogin(env):
     assert admin.post("/api/v1/admin/broker/relogin", headers=csrf(admin)).json() == {"accepted": True}
     assert gw.relogins == 1 and audit_actions()[-1] == "broker.relogin"
 
+
+def test_profile_levels_endpoint(env):
+    client, _, _ = env
+    assert client.get("/api/v1/market/profile/levels").status_code == 401
+    register_and_login(client)
+    r = client.get("/api/v1/market/profile/levels?row=5&composite=week")
+    assert r.status_code == 200 and r.headers["cache-control"] == "private, max-age=60"
+    assert r.json()["naked_pocs"][0]["price"] == 22490 and r.json()["composite"]["composite"]["label"] == "week"
+    assert client.get("/api/v1/market/profile/levels").json()["composite"] is None
+    assert client.get("/api/v1/market/profile/levels?row=3").json()["error"]["code"] == "INVALID_ROW"
+    assert client.get("/api/v1/market/profile/levels?composite=3d").json()["error"]["code"] == "VALIDATION_ERROR"
+
 def test_session_profile_endpoint(env):
     client, _, _ = env
     assert client.get("/api/v1/market/profile?date=2026-09-29").status_code == 401

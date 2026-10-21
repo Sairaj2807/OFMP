@@ -156,6 +156,10 @@ class FakeGateway:
         self.broker = None             # a broker session's status, when a test gives it one
         self.relogins = 0
 
+    async def profile_levels(self, row, composite):
+        return {"row_size": row, "naked_pocs": [{"date": "2026-10-08", "price": 22490, "sessions_ago": 3}],
+                "composite": {"composite": {"label": composite}} if composite else None}
+
     def broker_status(self):
         return self.broker
 
