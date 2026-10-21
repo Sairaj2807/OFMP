@@ -10,7 +10,8 @@
 import { shortDate } from "./multiDay";
 import type { MarketProfile, NakedPoc } from "../types";
 
-export const PROFILE_LEVELS = ["vva", "tva", "hvn", "ibext", "dpoc", "weak", "prev", "npoc"] as const;
+export const PROFILE_LEVELS = ["vva", "tva", "hvn", "ibext", "dpoc", "weak", "prev", "npoc", "structure", "varule",
+                               "clusters"] as const;
 export type ProfileLevel = (typeof PROFILE_LEVELS)[number];
 export const PROFILE_LEVEL_LABELS: Record<ProfileLevel, string> = {
   vva: "V-VA (VAH · VAL · VPOC · VWAP)",
@@ -21,6 +22,9 @@ export const PROFILE_LEVEL_LABELS: Record<ProfileLevel, string> = {
   weak: "Weak high / low",
   prev: "Previous day (POC · VA · high · low)",
   npoc: "Naked POCs (untouched VPOCs, 20 sessions)",
+  structure: "Day structure (shape · double distribution · open drive)",
+  varule: "Value Area rule (80% rule)",
+  clusters: "Volume clusters (absorption)",
 };
 
 /** Composite profile windows (finished sessions of the active contract). */
@@ -47,6 +51,7 @@ export const LEVEL_COLORS = {
   hvnFill: "rgba(154,106,58,0.30)",
   vaV: "rgba(76,141,255,0.10)", vaT: "rgba(160,120,255,0.08)", vaEdge: "#4c8dff", vaEdgeT: "#a078ff",
   ib: "#4c8dff", prev: "#8a93a3", weak: "#e0a43a", composite: "#7d8796",
+  cluster: "#c08a4f", thin: "rgba(163,172,186,0.10)", dd: "#a3acba", rule: "#e0a43a",
 };
 
 export type LineStyle = "band" | "thick" | "solid" | "dashed" | "dotted";
@@ -67,11 +72,20 @@ export interface Shading {
   edge?: string;
 }
 
+export interface Box {
+  low: number;
+  high: number;
+  label: string;
+  color: string;
+  dashed: boolean;
+}
+
 export interface ProfileDrawing {
   shading: Shading[];      // value areas and HVN bands, drawn under the letters
   lines: LevelLine[];      // drawn over the letters
   trail: { period: number; letter: string; price: number }[];
   weak: ("high" | "low")[];
+  boxes: Box[];            // volume clusters, the two distributions of a double distribution
 }
 
 export interface LevelOptions {
@@ -83,7 +97,7 @@ export interface LevelOptions {
 
 export function profileDrawing(p: MarketProfile, o: LevelOptions): ProfileDrawing {
   const on = (k: ProfileLevel) => o.enabled.includes(k);
-  const out: ProfileDrawing = { shading: [], lines: [], trail: [], weak: [] };
+  const out: ProfileDrawing = { shading: [], lines: [], trail: [], weak: [], boxes: [] };
   const line = (label: string, price: number | null | undefined, style: LineStyle, color: string, exact = false) => {
     if (price != null) out.lines.push({ label, price, style, color, exact });
   };
@@ -121,6 +135,23 @@ export function profileDrawing(p: MarketProfile, o: LevelOptions): ProfileDrawin
     if (p.weak_high) out.weak.push("high");
     if (p.weak_low) out.weak.push("low");
   }
+  const st = p.structure;
+  if (on("clusters")) {
+    for (const c of st?.clusters ?? []) {
+      out.boxes.push({ low: c.low, high: c.high, label: c.absorption ? "absorption" : "cluster",
+                       color: LEVEL_COLORS.cluster, dashed: !c.absorption });
+    }
+  }
+  if (on("structure") && st?.double_distribution) {
+    const dd = st.double_distribution;
+    out.shading.push({ low: dd.thin.low, high: dd.thin.high, fill: LEVEL_COLORS.thin, label: "thin zone" });
+    out.boxes.push({ low: dd.upper.low, high: dd.upper.high, label: "upper distribution", color: LEVEL_COLORS.dd, dashed: true });
+    out.boxes.push({ low: dd.lower.low, high: dd.lower.high, label: "lower distribution", color: LEVEL_COLORS.dd, dashed: true });
+  }
+  if (on("varule") && st?.value_area_rule?.active && st.value_area_rule.target != null) {
+    const r = st.value_area_rule;
+    line(r.met ? "80% met" : `80% → ${r.opened === "above" ? "VAL" : "VAH"}`, r.target, "dotted", LEVEL_COLORS.rule);
+  }
   if (on("prev") && o.previous && p.previous) {
     const pv = p.previous;
     line("pPOC", pv.poc_tpo, "dotted", LEVEL_COLORS.prev);
@@ -138,5 +169,28 @@ export function levelsOnRow(d: ProfileDrawing, rowPrice: number, rowSize: number
     exact ? price >= rowPrice - 1e-9 && price < rowPrice + rowSize - 1e-9 : Math.abs(price - rowPrice) < 1e-9;
   const names = d.lines.filter((l) => inRow(l.price, l.exact)).map((l) => l.label);
   for (const s of d.shading) if (s.label && rowPrice >= s.low - 1e-9 && rowPrice <= s.high + 1e-9) names.push(s.label);
+  for (const b of d.boxes) if (rowPrice >= b.low - 1e-9 && rowPrice <= b.high + 1e-9) names.push(b.label);
   return [...new Set(names)];
+}
+
+/** Day-structure labels for the figures bar. */
+export function structureBadges(p: MarketProfile, enabled: readonly ProfileLevel[]): string[] {
+  const st = p.structure;
+  if (!st) return [];
+  const out: string[] = [];
+  if (enabled.includes("structure")) {
+    if (st.shape) out.push(st.shape === "trend" ? "Trend day" : `${st.shape}-shape`);
+    if (st.double_distribution) out.push("Double distribution");
+    if (st.open_drive) out.push(`Open drive ${st.open_drive === "up" ? "↑" : "↓"}`);
+  }
+  const r = st.value_area_rule;
+  if (enabled.includes("varule") && r && r.opened !== "inside") {
+    out.push(r.active ? `80% rule ${r.met ? "met" : "active"} → ${r.target}`
+      : `Opened ${r.opened} prior VA`);
+  }
+  if (enabled.includes("clusters")) {
+    const abs = st.clusters.filter((c) => c.absorption).length;
+    if (st.clusters.length) out.push(`${st.clusters.length} cluster${st.clusters.length > 1 ? "s" : ""}${abs ? ` (${abs} absorption)` : ""}`);
+  }
+  return out;
 }

@@ -13,7 +13,8 @@ import { useEffect, useRef, useState } from "react";
 
 import { periodColor } from "@/lib/chart/profileLayout";
 import {
-  LEVEL_COLORS, levelsOnRow, type LevelLine, nakedLabel, nakedToday, type ProfileLevel, profileDrawing,
+  type Box, LEVEL_COLORS, levelsOnRow, type LevelLine, nakedLabel, nakedToday, type ProfileLevel, profileDrawing,
+  structureBadges,
 } from "@/lib/chart/profileLevels";
 import { api } from "@/lib/api";
 import {
@@ -349,6 +350,9 @@ export function MultiDayProfileChart({ config, units, lotSize }: Props) {
             <Fig label="Vol" value={compact(p.stats.volume / d)} />
             <Fig label="Δ" value={signed(p.stats.delta / d)} tone={p.stats.delta >= 0 ? "buy" : "sell"} />
             {!!p.single_prints?.length && <Fig label="Singles" value={String(p.single_prints.length)} />}
+            {structureBadges(p, config.profileLevels).map((b) => (
+              <span key={b} className="rounded border border-line bg-panel-2 px-1.5 text-fg-2" aria-label="Day structure">{b}</span>
+            ))}
             {(p.weak_high || p.weak_low) && (
               <Fig label="Weak" value={[p.weak_high && "high", p.weak_low && "low"].filter(Boolean).join(" · ")} />
             )}
@@ -492,6 +496,7 @@ function drawSession(ctx: CanvasRenderingContext2D, col: DayColumn, i: number, m
     ctx.fillStyle = C.lvn;
     for (const price of p.lvn ?? []) ctx.fillRect(volX - 4, rowY(price) + l.rowPx / 2 - 1, 3, 2);
   }
+  drawBoxes(ctx, drawing.boxes, tpoX0, right, l, m);
   drawLevels(ctx, drawing.lines, x0, tpoX0, right, l, m, rowSize, bottom);
   drawTrail(ctx, drawing.trail, p, tpoX0, l, m);
   if (drawing.weak.length && p.rows.length) {
@@ -576,6 +581,26 @@ function drawNaked(ctx: CanvasRenderingContext2D, npocs: NakedPoc[], columns: Da
   };
   edge(above, true);
   edge(below, false);
+}
+
+/** Volume clusters (solid: absorption) and the two distributions of a double distribution, as outlined boxes. */
+function drawBoxes(ctx: CanvasRenderingContext2D, boxes: Box[], from: number, to: number, l: MultiLayout, m: Mapper) {
+  ctx.font = "9px ui-sans-serif, system-ui, sans-serif";
+  ctx.textBaseline = "alphabetic";
+  for (const b of boxes) {
+    const top = m.priceToY(b.high), bottom = m.priceToY(b.low) + l.rowPx;
+    if (bottom < l.plotTop || top > l.plotTop + l.plotH) continue;
+    ctx.strokeStyle = b.color;
+    ctx.lineWidth = 1;
+    ctx.setLineDash(b.dashed ? [3, 3] : []);
+    ctx.strokeRect(Math.round(from - 6) + 0.5, Math.round(top) + 0.5, Math.round(to - from + 8), Math.max(2, Math.round(bottom - top)));
+    ctx.setLineDash([]);
+    if (l.colW >= 110 && bottom - top >= 8) {
+      ctx.fillStyle = b.color;
+      ctx.fillText(b.label, from - 4, top + 9);
+    }
+  }
+  ctx.textBaseline = "middle";
 }
 
 /** y of a level: a row's centre, or (exact prices such as VWAP) where the price falls inside its row. */

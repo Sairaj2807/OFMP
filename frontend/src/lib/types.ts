@@ -219,9 +219,25 @@ export interface MarketProfile {
   dpoc?: { price: number | null; trail: { period: number; letter: string; price: number }[] };
   weak_high?: boolean;
   weak_low?: boolean;
+  structure?: ProfileStructure;
   stats?: { open: number; high: number; low: number; close: number; tpo_total: number; volume: number;
             delta: number; trades: number };
   previous?: MarketProfileLevels | null;
+}
+
+/** Day structure labels (backend/app/domain/profile/structure.py). */
+export interface ProfileStructure {
+  shape: "D" | "p" | "b" | "trend" | null;
+  double_distribution: { lower: PriceSpan; upper: PriceSpan; thin: PriceSpan } | null;
+  open_drive: "up" | "down" | null;
+  value_area_rule: { opened: "above" | "below" | "inside"; active: boolean; target: number | null; met: boolean;
+                     activated: number | null; vah: number; val: number } | null;
+  clusters: (PriceSpan & { volume: number; delta: number; periods: number; absorption: boolean })[];
+}
+
+export interface PriceSpan {
+  low: number;
+  high: number;
 }
 
 /** A volume POC of a finished session that no later session has traded into. */

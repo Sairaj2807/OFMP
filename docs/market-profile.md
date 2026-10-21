@@ -21,9 +21,42 @@ footprint, one at a time: live trades, the startup restore and replay. It never 
 | Initial balance | High and low of periods A and B (09:15–10:15). Shown as "forming" until C trades. Extensions above and below are measured from it. |
 | Single prints | Runs of adjacent rows with exactly one TPO from the same finished period, inside the profile. |
 | Tails | Single-print runs at the top of the profile (selling tail) or the bottom (buying tail). |
-| HVN / LVN (v1) | A row with the largest / smallest volume within ±2 rows, and ≥ 1.5× / ≤ 0.5× the mean row volume. LVNs only count away from the edges. |
+| HVN (v2) | A run of adjacent rows, each with ≥ 70% of the VPOC row's volume, that doesn't contain the VPOC row. Reported as a band and its peak row. |
+| LVN (v1) | A row with the smallest volume within ±2 rows and ≤ 0.5× the mean row volume, away from the edges. |
 | Order flow per row | Every row carries volume, buy, sell and delta, from the classified trades. |
 | Previous session | Its POC, VAH and VAL are drawn as dotted reference lines. At startup it is loaded from stored trades. |
+
+## Levels (owner decisions 2026-10-21)
+
+Every value is computed on the server (`analytics.py`, `levels.py`, `structure.py`). Live, replay, history and
+multi-day therefore always agree. Shown on the chart with the **Levels ▾** menu (saved per chart).
+
+| Level | Rule | Drawn as |
+|---|---|---|
+| VPOC / TPOC | volume / TPO POC (existing rule) | thick pink band |
+| VWAP | Σ(price × qty) ÷ Σ qty over the session's trades, exact (volume is kept per tick) | thick green line |
+| TWAP | the TPO median: the row where the TPOs at or below it first reach half of all TPOs | thick green line |
+| V-VA | VAH / VAL of the volume value area (70%) | solid blue lines and shading |
+| T-VA | TPO-VAH / TPO-VAL of the TPO value area (70%) | dashed purple lines and shading |
+| HVN | see the definitions above | thick brown band |
+| IB extensions | IBH + 0.5 / 1 / 2 × the IB range (1.5× / 2× / 3×) and the same below IBL, once the IB is final; the figures show the furthest reached | dashed blue lines |
+| Developing POC | the volume POC up to the end of each period; the last one is the current DPOC | pink trail, left to right |
+| Weak high / low | the top / bottom row has 2 or more TPOs and no tail there | dotted amber edge, "weak high/low" |
+| Previous day | POC, VAH, VAL (TPO), high and low (PDH/PDL) | dotted grey lines (single-day view) |
+| Naked POC | a finished session's VPOC row that no later session traded into, over the last 20 sessions; hidden once today's range reaches it | dashed pink line from its session to the axis, "nPOC 13 Oct · 3d"; off-screen ones as ▲/▼ markers |
+| Composite | 5 / 10 / 20 sessions, this week or this month merged per row (TPOs and volume summed), with the single-session rules | a column at the left, TPO counts as bars |
+
+**Day structure** (`structure.py`; all thresholds are named constants there):
+
+| Label | Rule |
+|---|---|
+| D / p / b | From the TPO distribution, once 4 periods have traded. **D:** the TPO POC and value area in the middle of the range (35–65%). **p:** POC above 60% and the lower 40% holding ≤ 25% of TPOs. **b:** the mirror image. **Trend day:** a value area ≤ 40% of the range and a range ≥ 2× the IB. |
+| Double distribution | The two highest TPO peaks (each ≥ half the largest), ≥ 3 rows apart, with a thin zone between them: ≥ 2 adjacent rows ≤ 30% of the smaller peak. Each side's own 70% value area is marked. |
+| Open drive ↑/↓ | Period A opens within 10% of its range from its low (or high), never trades more than 10% back through the open, and B extends beyond A without returning to the open. |
+| Value Area rule (80%) | The session opens outside the previous session's **volume** value area, then two consecutive periods close inside it. The target is the far edge (VAL if it opened above), and "met" once reached. |
+| Volume cluster | ≥ 2 adjacent rows, each ≥ 60% of the VPOC row's volume, touched by ≥ 3 periods. **Absorption** when the cluster's buy − sell is ≤ 10% of its volume. |
+
+Not built: IB30/IS30 (owner decision) and gamma (needs options data).
 
 ## Where it comes from
 

@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import type { MarketProfile } from "../types";
 import { shortDate } from "./multiDay";
-import { LEVEL_COLORS, levelsOnRow, nakedLabel, nakedToday, PROFILE_LEVELS, profileDrawing } from "./profileLevels";
+import {
+  LEVEL_COLORS, levelsOnRow, nakedLabel, nakedToday, PROFILE_LEVELS, profileDrawing, structureBadges,
+} from "./profileLevels";
 
 const p: MarketProfile = {
   date: "2026-10-21", rows: [], poc_volume: 24510, poc_tpo: 24505, vwap: 24512.37, twap: 24505,
@@ -40,7 +42,7 @@ describe("profile levels", () => {
     expect(vOnly.lines.map((l) => l.label)).toEqual(["VAH", "VAL", "VWAP"]);       // no POC band, no shading
     expect(vOnly.shading).toEqual([]);
     expect(profileDrawing(p, { ...all, previous: false }).lines.some((l) => l.label === "PDH")).toBe(false);
-    expect(profileDrawing({ date: null, rows: [] }, all)).toEqual({ shading: [], lines: [], trail: [], weak: [] });
+    expect(profileDrawing({ date: null, rows: [] }, all)).toEqual({ shading: [], lines: [], trail: [], weak: [], boxes: [] });
   });
 
   it("names the levels on a hovered row; an exact VWAP counts for the row it falls in", () => {
@@ -66,5 +68,36 @@ describe("naked POCs today", () => {
 
   it("labels each with its date and age in sessions", () => {
     expect(nakedLabel(npocs[0])).toBe(`nPOC ${shortDate("2026-10-13")} · 3d`);
+  });
+});
+
+describe("day structure", () => {
+  const st: MarketProfile = {
+    date: "2026-10-21", rows: [],
+    structure: {
+      shape: "b", open_drive: "up",
+      double_distribution: { lower: { low: 100, high: 110 }, upper: { low: 130, high: 140 }, thin: { low: 115, high: 125 } },
+      value_area_rule: { opened: "above", active: true, target: 100, met: false, activated: 1, vah: 120, val: 100 },
+      clusters: [{ low: 105, high: 110, volume: 500, delta: 20, periods: 4, absorption: true },
+                 { low: 135, high: 140, volume: 400, delta: 200, periods: 3, absorption: false }],
+    },
+  };
+
+  it("labels the day for the figures bar, following the Levels menu", () => {
+    expect(structureBadges(st, PROFILE_LEVELS)).toEqual(
+      ["b-shape", "Double distribution", "Open drive ↑", "80% rule active → 100", "2 clusters (1 absorption)"]);
+    expect(structureBadges(st, ["varule"])).toEqual(["80% rule active → 100"]);
+    const opened = { ...st, structure: { ...st.structure!, value_area_rule: { ...st.structure!.value_area_rule!, active: false } } };
+    expect(structureBadges(opened, ["varule"])).toEqual(["Opened above prior VA"]);
+    expect(structureBadges({ date: null, rows: [] }, PROFILE_LEVELS)).toEqual([]);
+  });
+
+  it("draws clusters, the two distributions with their thin zone, and the 80% target", () => {
+    const d = profileDrawing(st, all);
+    expect(d.boxes.map((b) => [b.label, b.low, b.dashed])).toEqual([
+      ["absorption", 105, false], ["cluster", 135, true], ["upper distribution", 130, true], ["lower distribution", 100, true]]);
+    expect(d.shading.find((x) => x.label === "thin zone")).toMatchObject({ low: 115, high: 125 });
+    expect(d.lines.find((l) => l.label.startsWith("80%"))).toMatchObject({ label: "80% → VAL", price: 100 });
+    expect(levelsOnRow(d, 105, 5)).toEqual(expect.arrayContaining(["absorption", "lower distribution"]));
   });
 });

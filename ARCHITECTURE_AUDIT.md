@@ -1346,3 +1346,48 @@ times are the plan's defaults (08:30 login, retries to 09:10, feed off 15:45).
 
 **Not done (with hosting):** running the process as a service or container, moving the schedule into the
 ingest worker for `INGEST_MODE=redis`, and an email/Telegram channel (webhooks can bridge to them).
+
+## 30. Market profile levels, cross-session levels and day structure
+
+Done on 2026-10-21 in three phases, each committed separately.
+
+**Owner decisions:**
+- HVN ≥ 70% of the VPOC row's volume;
+- naked POCs from the VPOC only, looking back 20 sessions;
+- composites of 5 / 10 / 20 days, this week or this month;
+- no IB30/IS30;
+- no gamma (no options data).
+
+**Phase 1, levels:**
+- engine: volume per period;
+- `build_profile`: exact VWAP, TWAP, HVN v2 bands, IB extensions, the DPOC trail, weak highs and lows, and the
+  previous session's volume VA, VWAP, high and low;
+- `profile-v2`.
+
+**Phase 2, across sessions:**
+- `domain/profile/levels.py`: naked POCs and composite profiles;
+- `GET /api/v1/market/profile/levels`, served from the cached profile history.
+
+**Phase 3, day structure:** `domain/profile/structure.py` (shape, double distribution, open drive, the 80% rule,
+volume clusters), in every profile under `structure`.
+
+**Frontend:**
+- `lib/chart/profileLevels.ts` turns a profile into drawing data (shading, lines, trail, weak edges, boxes) plus
+  labels and hover names; it is unit tested;
+- the renderer only paints that data;
+- Levels menu and Composite selector per chart (layout v9);
+- a checkbox menu shared with the footprint table rows.
+
+**Verified:**
+- 409 backend tests (24 new: every rule, plus the levels endpoint);
+- 62 frontend unit tests;
+- 16/16 Playwright tests (Levels menu saved across a reload, composite request);
+- real sessions:
+  - 13 Oct replay: VPOC 22790, TPOC 22615, VWAP 22694.51, 2× IB up, b-shape, one absorption cluster;
+  - nPOCs on 08, 12, 13, 16 and 21 Oct; 30 Sep's was correctly visited by 13 Oct;
+  - the 5-day composite: VPOC 22290, VWAP 22664.67.
+
+**Notes:**
+- Shapes use the TPO distribution (time), so 13 Oct is a "b" even though its volume POC sits high.
+- The 80% rule uses the previous session's volume value area.
+- A day missing from the database (09 Oct) shifts "previous session" and nPOC ages to the stored sessions.

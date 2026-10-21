@@ -124,3 +124,62 @@ def test_composite_merges_sessions_with_the_single_session_rules():
 
 def d1_tpo(p, price):
     return next(r["tpo"] for r in p["rows"] if r["price"] == price)
+
+
+# ---- day structure (phase 3) --------------------------------------------------------------------
+
+def test_shapes_from_the_tpo_distribution():
+    from backend.app.domain.profile.analytics import poc_index, value_area
+    from backend.app.domain.profile.structure import shape
+
+    def label(tpo, ib=None, periods=6, row=5):
+        poc = poc_index(tpo)
+        return shape(tpo, poc, value_area(tpo, poc), ib, row, periods)
+    assert label([1, 2, 4, 6, 4, 2, 1]) == "D"                     # bell, centred
+    assert label([1, 1, 1, 2, 5, 7, 6, 4]) == "p"                  # fat top, thin lower tail
+    assert label([4, 6, 7, 5, 2, 1, 1, 1]) == "b"                  # fat bottom, thin upper tail
+    assert label([1, 2, 4, 6, 4, 2, 1], periods=3) is None          # too early in the day
+
+
+def test_double_distribution_needs_a_thin_zone_between_two_peaks():
+    from backend.app.domain.profile.structure import double_distribution
+    dd = double_distribution([2, 5, 6, 5, 1, 1, 1, 4, 7, 5, 2])
+    assert dd["thin"] == (4, 6)
+    assert dd["lower"][0] <= 2 <= dd["lower"][1] and dd["upper"][0] <= 8 <= dd["upper"][1]
+    assert double_distribution([2, 5, 6, 5, 3, 4, 7, 5, 2]) is None            # no thin zone (3 > 30% of 6)
+    assert double_distribution([2, 5, 6, 5, 1, 4, 7, 5, 2]) is None            # one thin row is not a zone
+
+
+def test_open_drive_up_and_down_and_a_failed_drive():
+    from backend.app.domain.profile.structure import open_drive
+    # (index, open, high, low, close)
+    assert open_drive([(0, 100, 120, 99, 118), (1, 118, 130, 110, 128)]) == "up"
+    assert open_drive([(0, 120, 121, 100, 102), (1, 102, 110, 90, 92)]) == "down"
+    assert open_drive([(0, 100, 120, 99, 118), (1, 118, 130, 99, 128)]) is None    # B came back to the open
+    assert open_drive([(0, 110, 120, 99, 118), (1, 118, 130, 112, 128)]) is None   # A opened mid-range
+    assert open_drive([(0, 100, 120, 99, 118)]) is None
+
+
+def test_value_area_rule_activates_after_two_periods_inside_and_tracks_the_target():
+    from backend.app.domain.profile.structure import value_area_rule
+    # previous volume VA rows 100..120 (VAH row 120 covers 120-125); opened above at 130
+    per = [(0, 130, 132, 122, 123), (1, 123, 124, 112, 115), (2, 115, 118, 99, 101)]
+    r = value_area_rule(130, per, 120, 100, 5)
+    assert r["opened"] == "above" and r["active"] and r["activated"] == 1 and r["target"] == 100 and r["met"]
+    r = value_area_rule(130, per[:2], 120, 100, 5)
+    assert r["active"] and not r["met"]
+    assert not value_area_rule(130, [(0, 130, 132, 122, 123), (1, 123, 135, 126, 130)], 120, 100, 5)["active"]
+    assert value_area_rule(110, per, 120, 100, 5)["opened"] == "inside"
+    assert value_area_rule(90, [(0, 90, 104, 89, 103), (1, 103, 110, 100, 108)], 120, 100, 5)["target"] == 120
+    assert value_area_rule(130, per, None, None, 5) is None
+
+
+def test_volume_clusters_and_absorption():
+    from backend.app.domain.profile.structure import volume_clusters
+    vol = [10, 70, 80, 100, 20, 65, 66, 10]
+    buy = [5, 36, 41, 60, 10, 60, 60, 5]
+    sell = [5, 34, 39, 40, 10, 5, 6, 5]
+    periods = [[0], [0, 1, 2], [1, 2], [2, 3], [3], [4, 5], [5], [6]]
+    out = volume_clusters(vol, buy, sell, periods, 3)
+    assert out == [(1, 3, 250, 24, 4, True)]            # rows 5-6: only 2 periods touched them: not a cluster
+    assert volume_clusters(vol, buy, sell, [[0, 1, 2, 3]] * 8, 3)[1][5] is False    # 120 buy vs 11 sell: directional

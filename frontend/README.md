@@ -140,6 +140,16 @@ It works live and in replay. Definitions are in `docs/market-profile.md`.
 The coordinate model is `src/lib/chart/multiDay.ts` and the renderer is
 `components/chart/MultiDayProfileChart.tsx`.
 
+**Levels** (▾ menu, saved per chart):
+- V-VA (VAH, VAL, VPOC, VWAP) and T-VA (TPO-VAH, TPO-VAL, TPOC, TWAP);
+- HVN, IB extensions, the developing POC trail, weak highs and lows;
+- the previous day's levels and naked POCs;
+- day structure (shape, double distribution, open drive), the 80% rule and volume clusters.
+
+VPOC/TPOC are pink bands, VWAP/TWAP green and HVN brown. **Composite** adds a merged profile column (5, 10 or 20
+days, this week, or this month). The figures bar shows the values and the day's labels, and hovering a row names the
+levels on it. Definitions are in `docs/market-profile.md`; the drawing data is `src/lib/chart/profileLevels.ts`.
+
 **Pan and zoom on both axes** (single-day and multi-day):
 - drag to pan;
 - Ctrl/⌘+wheel or pinch to zoom around the cursor;

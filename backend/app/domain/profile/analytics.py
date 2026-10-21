@@ -268,4 +268,25 @@ def build_profile(profile: SessionProfile, row_points: float = 5.0, va_pct: floa
     }
     if include_previous and profile.previous is not None:
         result["previous"] = _levels(profile.previous, row_points)
+    result["structure"] = _structure(result, periods, tpo, vol, buy, sell, p_tpo, va_t, p_vol, price)
     return result
+
+
+def _structure(result: dict, row_periods: list, tpo: list, vol: list, buy: list, sell: list,
+               p_tpo: Optional[int], va_t: Optional[tuple], p_vol: Optional[int], price: list) -> dict:
+    """Day structure labels (see structure.py), with row indexes turned into prices."""
+    from . import structure as st
+    rs = result["row_size"]
+    per = [(x["index"], x["open"], x["high"], x["low"], x["close"]) for x in result["periods"]]
+    dd = st.double_distribution(tpo)
+    prev = result.get("previous") or {}
+    span = lambda a, b: {"low": price[a], "high": price[b]}                    # noqa: E731
+    return {
+        "shape": st.shape(tpo, p_tpo, va_t, result["initial_balance"]["range"], rs, len(per)),
+        "double_distribution": {k: span(*v) for k, v in dd.items()} if dd else None,
+        "open_drive": st.open_drive(per),
+        "value_area_rule": st.value_area_rule(result["stats"]["open"], per, prev.get("vah_volume"),
+                                              prev.get("val_volume"), rs),
+        "clusters": [{**span(lo, hi), "volume": v, "delta": d, "periods": n, "absorption": a}
+                     for lo, hi, v, d, n, a in st.volume_clusters(vol, buy, sell, row_periods, p_vol)],
+    }
